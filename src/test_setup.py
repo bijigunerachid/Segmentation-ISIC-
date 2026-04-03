@@ -25,7 +25,7 @@ ok = True
 for path, label in [(IMAGES_DIR, "Images"), (MASKS_DIR, "Masques")]:
     if os.path.isdir(path):
         files = os.listdir(path)
-        print(f"  ✔ {label} : {path}  ({len(files)} fichiers)")
+        print(f"  OK {label} : {path}  ({len(files)} fichiers)")
     else:
         print(f"  ✘ {label} INTROUVABLE : {path}")
         ok = False
@@ -56,9 +56,9 @@ if mask is None:
     print(f"    Cherché : {sample_mask_path}")
     sys.exit(1)
 
-print(f"  ✔ Image  : {sample_img_name}  shape={img.shape}")
-print(f"  ✔ Masque : {sample_mask_name}  shape={mask.shape}")
-print(f"  ✔ Valeurs masque : min={mask.min()}, max={mask.max()}")
+print(f"  OK Image  : {sample_img_name}  shape={img.shape}")
+print(f"  OK Masque : {sample_mask_name}  shape={mask.shape}")
+print(f"  OK Valeurs masque : min={mask.min()}, max={mask.max()}")
 
 # ── 3. Test DataLoader ────────────────────────────────────
 print("\n[3/5] Test du DataLoader (5 images)...")
@@ -73,10 +73,10 @@ from torch.utils.data import DataLoader
 loader = DataLoader(ds, batch_size=2, shuffle=False, num_workers=0)
 images_batch, masks_batch = next(iter(loader))
 
-print(f"  ✔ Batch images : {images_batch.shape}")
-print(f"  ✔ Batch masques: {masks_batch.shape}")
-print(f"  ✔ Images dtype : {images_batch.dtype}")
-print(f"  ✔ Masque min/max : {masks_batch.min():.1f} / {masks_batch.max():.1f}")
+print(f"  OK Batch images : {images_batch.shape}")
+print(f"  OK Batch masques: {masks_batch.shape}")
+print(f"  OK Images dtype : {images_batch.dtype}")
+print(f"  OK Masque min/max : {masks_batch.min():.1f} / {masks_batch.max():.1f}")
 
 # ── 4. Test modèle U-Net ──────────────────────────────────
 print("\n[4/5] Test du modèle U-Net...")
@@ -90,10 +90,10 @@ with torch.no_grad():
     out = model(x)
 
 params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"  ✔ Device   : {device}")
-print(f"  ✔ Entrée   : {x.shape}")
-print(f"  ✔ Sortie   : {out.shape}")
-print(f"  ✔ Paramètres : {params:,}")
+print(f"  OK Device   : {device}")
+print(f"  OK Entrée   : {x.shape}")
+print(f"  OK Sortie   : {out.shape}")
+print(f"  OK Paramètres : {params:,}")
 
 # ── 5. Visualisation d'un exemple ─────────────────────────
 print("\n[5/5] Génération d'une visualisation exemple...")
@@ -125,10 +125,10 @@ axes[2].axis("off")
 plt.tight_layout()
 plt.savefig("outputs/test_setup_preview.png", dpi=150, bbox_inches="tight")
 plt.show()
-print("  ✔ Visualisation sauvegardée → outputs/test_setup_preview.png")
+print("  OK Visualisation sauvegardée → outputs/test_setup_preview.png")
 
 # ── Résumé ────────────────────────────────────────────────
 print("\n" + "=" * 55)
-print("  ✔ TOUT EST PRÊT — tu peux lancer l'entraînement !")
+print("  OK TOUT EST PRÊT — tu peux lancer l'entraînement !")
 print("  Commande : python src/train.py")
 print("=" * 55 + "\n")

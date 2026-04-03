@@ -1,8 +1,8 @@
-# 📓 ISIC_Project — Notebooks Google Colab
+# ISIC_Project — Notebooks Google Colab
 
 Ce dossier contient **4 notebooks** à exécuter dans l'ordre sur Google Colab.
 
-## 📋 Ordre d'exécution
+## Ordre d'exécution
 
 | # | Notebook | Description |
 |---|----------|-------------|
@@ -11,14 +11,14 @@ Ce dossier contient **4 notebooks** à exécuter dans l'ordre sur Google Colab.
 | 3 | `03_Modele_et_Entrainement.ipynb` | U-Net, entraînement, sauvegarde du modèle |
 | 4 | `04_Evaluation_et_Predictions.ipynb` | Métriques, visualisation, rapport final |
 
-## 🚀 Comment utiliser
+## Comment utiliser
 
 1. Va sur https://colab.research.google.com
 2. **Fichier → Importer le notebook** → charge le `.ipynb`
 3. Active le GPU : **Environnement d'exécution → Modifier le type → T4 GPU**
 4. Exécute les cellules dans l'ordre (Ctrl+Enter)
 
-## 📁 Structure attendue sur Drive
+## Structure attendue sur Drive
 
 ```
 ISIC_Project/
@@ -30,7 +30,7 @@ ISIC_Project/
 └── outputs/        ← résultats générés automatiquement
 ```
 
-## 📦 Dépendances (installées automatiquement)
+## Dépendances (installées automatiquement)
 - PyTorch, torchvision
 - albumentations
 - opencv-python-headless

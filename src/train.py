@@ -33,7 +33,7 @@ CONFIG = {
     "masks_dir"     : "data/Masques",
     "checkpoint_dir": "outputs/checkpoints",
 
-    # ⚡ Paramètres optimisés pour CPU
+    # Paramètres optimisés pour CPU
     "img_size"      : 128,   # 128 au lieu de 256 → 4x plus rapide
     "batch_size"    : 4,     # 4 au lieu de 8 → moins de RAM
     "num_epochs"    : 20,    # 20 epochs suffisent pour valider
