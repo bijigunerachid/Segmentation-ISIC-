@@ -24,7 +24,6 @@ from src.utils   import DiceBCELoss, dice_score, iou_score, \
                          visualize_predictions, plot_training_curves
 
 
-# ─────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────
 
@@ -115,7 +114,7 @@ def main():
     # ── Device ──
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*50}")
-    print(f"  Entraînement U-Net — ISIC 2018 Task 1")
+    print("  Entraînement U-Net — ISIC 2018 Task 1")
     print(f"{'='*50}")
     print(f"  Device   : {device}")
     print(f"  Epochs   : {CONFIG['num_epochs']}")
@@ -196,7 +195,7 @@ def main():
 
     # ── Résumé final ──
     print(f"\n{'='*50}")
-    print(f"  Entraînement terminé !")
+    print("  Entraînement terminé !")
     print(f"  Meilleur Dice Val : {best_val_dice:.4f}")
     print(f"{'='*50}\n")
 

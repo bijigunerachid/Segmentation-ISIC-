@@ -70,7 +70,7 @@ ds = ISICDataset(IMAGES_DIR, MASKS_DIR, transform=get_train_transforms(256))
 ds.image_ids = ds.image_ids[:5]
 
 from torch.utils.data import DataLoader
-loader = DataLoader(ds, batch_size=2, shuffle=False)
+loader = DataLoader(ds, batch_size=2, shuffle=False, num_workers=0)
 images_batch, masks_batch = next(iter(loader))
 
 print(f"  ✔ Batch images : {images_batch.shape}")

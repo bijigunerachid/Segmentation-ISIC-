@@ -99,10 +99,13 @@ class ISICDataset(Dataset):
         if self.transform:
             augmented = self.transform(image=image, mask=mask)
             image = augmented['image']          # Tensor [3, H, W]
-            mask  = augmented['mask']           # Tensor [H, W]
+            mask  = augmented['mask']           # Peut être numpy ou tensor
 
-        # Ajoute dimension canal au masque → [1, H, W]
-        mask = mask.unsqueeze(0)
+        # Convertir le masque en tensor si nécessaire et ajouter dimension canal → [1, H, W]
+        if isinstance(mask, np.ndarray):
+            mask = torch.from_numpy(mask).unsqueeze(0).float()
+        else:
+            mask = mask.unsqueeze(0).float()
 
         return image, mask
 

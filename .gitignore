@@ -31,6 +31,9 @@ outputs/predictions/
 .vscode/
 *.code-workspace
 
+# Rapport
+rapport/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -38,3 +41,11 @@ Thumbs.db
 # Logs
 *.log
 runs/
+
+# Modèles lourds et checkpoints
+models/*.pth
+models/checkpoints/*.pth
+
+# Sorties générées
+outputs/
+
