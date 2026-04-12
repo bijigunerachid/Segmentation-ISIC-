@@ -24,7 +24,6 @@ outputs/checkpoints/*.pt
 outputs/predictions/
 
 # Jupyter
-*.ipynb
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
