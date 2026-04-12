@@ -162,17 +162,183 @@ class UNet(nn.Module):
         return out                # Pas de sigmoid ici → géré par la loss
 
 
+# ═════════════════════════════════════════════
+# SegNet — Encodeur-Décodeur avec Max-Unpooling
+# ═════════════════════════════════════════════
+
+class SegNetBlock(nn.Module):
+    """Bloc SegNet : plusieurs convolutions + batch norm + relu."""
+    def __init__(self, in_channels, out_channels, num_convs=2):
+        super().__init__()
+        layers = []
+        for i in range(num_convs):
+            layers.append(nn.Conv2d(in_channels if i==0 else out_channels, 
+                                    out_channels, kernel_size=3, padding=1))
+            layers.append(nn.BatchNorm2d(out_channels))
+            layers.append(nn.ReLU(inplace=True))
+        self.block = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class SegNet(nn.Module):
+    """
+    SegNet pour segmentation binaire.
+    
+    Encodeur VGG-like + Décodeur avec Max-Unpooling (stocke les indices).
+    
+    Entrée  : Tensor [B, 3, H, W]
+    Sortie  : Tensor [B, 1, H, W]
+    """
+    def __init__(self, in_channels=3, out_channels=1):
+        super().__init__()
+        
+        # ── Encodeur ──
+        self.enc1 = SegNetBlock(in_channels, 64, 2)
+        self.enc2 = SegNetBlock(64, 128, 2)
+        self.enc3 = SegNetBlock(128, 256, 3)
+        self.enc4 = SegNetBlock(256, 512, 3)
+        self.enc5 = SegNetBlock(512, 512, 3)
+        
+        # ── Décodeur ──
+        self.dec5 = SegNetBlock(512, 512, 3)
+        self.dec4 = SegNetBlock(512, 256, 3)
+        self.dec3 = SegNetBlock(256, 128, 3)
+        self.dec2 = SegNetBlock(128, 64, 2)
+        self.dec1 = SegNetBlock(64, 64, 2)
+        
+        # ── MaxPool et MaxUnpool ──
+        self.maxpool = nn.MaxPool2d(2, 2, return_indices=True)
+        self.maxunpool = nn.MaxUnpool2d(2, 2)
+        
+        # ── Couche finale ──
+        self.final = nn.Conv2d(64, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        # ── Encodeur (stocke indices) ──
+        x1 = self.enc1(x)
+        x, idx1 = self.maxpool(x1)
+        
+        x2 = self.enc2(x)
+        x, idx2 = self.maxpool(x2)
+        
+        x3 = self.enc3(x)
+        x, idx3 = self.maxpool(x3)
+        
+        x4 = self.enc4(x)
+        x, idx4 = self.maxpool(x4)
+        
+        x5 = self.enc5(x)
+        x, idx5 = self.maxpool(x5)
+        
+        # ── Décodeur (utilise indices) ──
+        x = self.maxunpool(x, idx5, output_size=x5.size())
+        x = self.dec5(x)
+        
+        x = self.maxunpool(x, idx4, output_size=x4.size())
+        x = self.dec4(x)
+        
+        x = self.maxunpool(x, idx3, output_size=x3.size())
+        x = self.dec3(x)
+        
+        x = self.maxunpool(x, idx2, output_size=x2.size())
+        x = self.dec2(x)
+        
+        x = self.maxunpool(x, idx1, output_size=x1.size())
+        x = self.dec1(x)
+        
+        # ── Couche finale ──
+        out = self.final(x)
+        return out
+
+
+# ═════════════════════════════════════════════
+# DeepLabV3 — Atrous Spatial Pyramid Pooling
+# ═════════════════════════════════════════════
+
+class DeepLabV3(nn.Module):
+    """
+    DeepLabV3 avec backbone ResNet50 pré-entraîné.
+    
+    Utilise le module Atrous Spatial Pyramid Pooling (ASPP) pour
+    capturer des features multi-échelle.
+    
+    Entrée  : Tensor [B, 3, H, W]
+    Sortie  : Tensor [B, 1, H, W]
+    """
+    def __init__(self, in_channels=3, out_channels=1, pretrained=True):
+        super().__init__()
+        import torchvision.models.segmentation as seg_models
+        
+        # Charger DeepLabV3 pré-entraîné
+        weights = (seg_models.DeepLabV3_ResNet50_Weights.DEFAULT 
+                   if pretrained else None)
+        self.model = seg_models.deeplabv3_resnet50(
+            weights=weights, 
+            aux_loss=False
+        )
+        
+        # Remplacer la tête pour segmentation binaire
+        self.model.classifier[4] = nn.Conv2d(256, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        # Les modèles torchvision retournent un dict
+        output = self.model(x)
+        
+        # Extraire les logits
+        if isinstance(output, dict):
+            out = output['out']
+        else:
+            out = output
+        
+        # Assurer que la taille de sortie = taille d'entrée
+        if out.shape[-2:] != x.shape[-2:]:
+            out = F.interpolate(out, size=x.shape[-2:], 
+                               mode='bilinear', align_corners=False)
+        
+        return out
+
+
 # ─────────────────────────────────────────────
 # Vérification rapide
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    model  = UNet(in_channels=3, out_channels=1)
-    x      = torch.randn(2, 3, 256, 256)   # batch de 2 images 256×256
-    output = model(x)
-    print(f"Entrée  : {x.shape}")
-    print(f"Sortie  : {output.shape}")     # → torch.Size([2, 1, 256, 256])
-
-    # Compte les paramètres
-    params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Paramètres entraînables : {params:,}")
+    x = torch.randn(2, 3, 256, 256)   # batch test
+    
+    print("Test des 3 modèles de segmentation")
+    print("=" * 60)
+    
+    # U-Net
+    unet = UNet(in_channels=3, out_channels=1)
+    with torch.no_grad():
+        unet_out = unet(x)
+    params_unet = sum(p.numel() for p in unet.parameters() if p.requires_grad)
+    print("U-Net")
+    print(f"  Sortie  : {unet_out.shape}")
+    print(f"  Params  : {params_unet:,}")
+    print()
+    
+    # SegNet
+    segnet = SegNet(in_channels=3, out_channels=1)
+    with torch.no_grad():
+        segnet_out = segnet(x)
+    params_segnet = sum(p.numel() for p in segnet.parameters() if p.requires_grad)
+    print("SegNet")
+    print(f"  Sortie  : {segnet_out.shape}")
+    print(f"  Params  : {params_segnet:,}")
+    print()
+    
+    # DeepLabV3
+    print("DeepLabV3 (chargement du backbone pré-entraîné...)")
+    deeplab = DeepLabV3(in_channels=3, out_channels=1, pretrained=True)
+    with torch.no_grad():
+        deeplab_out = deeplab(x)
+    params_deeplab = sum(p.numel() for p in deeplab.parameters() if p.requires_grad)
+    print(f"  Sortie  : {deeplab_out.shape}")
+    print(f"  Params  : {params_deeplab:,}")
+    print()
+    
+    print("=" * 60)
+    print("OK - Les 3 modèles sont opérationnels!")

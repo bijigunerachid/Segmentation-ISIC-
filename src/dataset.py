@@ -14,10 +14,6 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 
-# ─────────────────────────────────────────────
-# Transformations
-# ─────────────────────────────────────────────
-
 def get_train_transforms(img_size=256):
     """Augmentation pour l'entraînement."""
     return A.Compose([
@@ -46,10 +42,6 @@ def get_val_transforms(img_size=256):
         ToTensorV2(),
     ])
 
-
-# ─────────────────────────────────────────────
-# Dataset
-# ─────────────────────────────────────────────
 
 class ISICDataset(Dataset):
     """

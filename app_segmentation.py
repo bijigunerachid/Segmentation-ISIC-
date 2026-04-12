@@ -16,6 +16,10 @@ from tkinter import filedialog, messagebox
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
+# ── Constantes ──
+TAB_RESULTS = "Résultats"
+TAB_HISTORY = "Historique"
+
 try:
     from src.model  import UNet
     from src.utils  import dice_score, iou_score
@@ -417,7 +421,7 @@ class SegApp(ctk.CTk):
         self.tabs = ctk.CTkTabview(main, corner_radius=10)
         self.tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
-        for tab in ["Résultats", "Historique"]:
+        for tab in [TAB_RESULTS, TAB_HISTORY]:
             self.tabs.add(tab)
 
         self._build_results_tab()
@@ -429,7 +433,7 @@ class SegApp(ctk.CTk):
         self.progress.set(0)
 
     def _build_results_tab(self):
-        tab = self.tabs.tab("Résultats")
+        tab = self.tabs.tab(TAB_RESULTS)
         tab.grid_rowconfigure(1, weight=1)
         tab.grid_columnconfigure((0, 1, 2), weight=1)
 
@@ -464,7 +468,7 @@ class SegApp(ctk.CTk):
                           fill="gray", font=("Arial", 11), tags="placeholder")
 
     def _build_history_tab(self):
-        tab = self.tabs.tab("Historique")
+        tab = self.tabs.tab(TAB_HISTORY)
         tab.grid_rowconfigure(0, weight=1)
         tab.grid_columnconfigure(0, weight=1)
 
@@ -955,7 +959,7 @@ class SegApp(ctk.CTk):
         self.tensor_img = result["image"].unsqueeze(0)
         self._show_image_on_canvas(0, self.orig_rgb)
         self.img_info.configure(text=f"{os.path.basename(path)}\n{w}×{h} px")
-        self.tabs.set("Résultats")
+        self.tabs.set(TAB_RESULTS)
         self._status(f"Image rechargée : {os.path.basename(path)}", "green")
 
     def _clear_history(self):
@@ -988,9 +992,7 @@ class SegApp(ctk.CTk):
             c.configure(bg=bg)
 
 
-# ════════════════════════════════════════════════════════════
 # Lancement
-# ════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     app = SegApp()
     app.mainloop()
