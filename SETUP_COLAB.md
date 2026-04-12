@@ -55,14 +55,14 @@ drive.mount('/content/drive')
 import os
 os.chdir('/content/drive/My Drive/ISIC_Project')
 
-!git clone https://github.com/TON_USERNAME/ISIC_Project.git .
+!git clone https://github.com/bijigunerachid/Segmentation-ISIC-.git .
 
 # Les fichiers src/ et notebooks/ sont maintenant dans Drive!
 ```
 
 ### Méthode 2: Manuelle via Google Drive
 
-1. Va sur **[GitHub du projet](https://github.com/TON_USERNAME/ISIC_Project)**
+1. Va sur **[GitHub du projet](https://github.com/bijigunerachid/Segmentation-ISIC-)**
 2. **Code → Download ZIP**
 3. **Unzip** et mets le contenu dans `ISIC_Project/` sur Drive
 
