@@ -1,6 +1,6 @@
-# 📓 Guide Complet: ISIC Project sur Google Colab + Drive
+# Guide Complet: ISIC Project sur Google Colab + Drive
 
-## 🤔 Pourquoi utiliser Google Colab?
+## Pourquoi utiliser Google Colab?
 
 | Raison | Avantage |
 |--------|----------|
@@ -12,7 +12,7 @@
 
 ---
 
-## 📋 Étape 1: Préparer Google Drive
+## Étape 1: Préparer Google Drive
 
 ### 1.1 Créer le dossier racine
 1. Va sur **[Google Drive](https://drive.google.com)**
@@ -36,11 +36,11 @@ ISIC_Project/
 2. **Mets les images** dans `ISIC_Project/data/Images/`
 3. **Mets les masques** dans `ISIC_Project/data/Masques/`
 
-💡 **Conseil:** Si ton dataset est > 1GB, compresse-le en ZIP d'abord, puis extrais-le dans Colab.
+**Conseil:** Si ton dataset est > 1GB, compresse-le en ZIP d'abord, puis extrais-le dans Colab.
 
 ---
 
-## 🚀 Étape 2: Cloner le projet depuis GitHub
+## Étape 2: Cloner le projet depuis GitHub
 
 ### Méthode 1: Depuis Google Colab (RECOMMANDÉ)
 
@@ -68,11 +68,11 @@ os.chdir('/content/drive/My Drive/ISIC_Project')
 
 ---
 
-## 📖 Étape 3: Exécuter les Notebooks dans l'ordre
+## Étape 3: Exécuter les Notebooks dans l'ordre
 
 ### Commençons! 
 
-#### **📌 Notebook 1: Setup et Exploration** (30 min)
+#### **Notebook 1: Setup et Exploration** (30 min)
 ```
 notebooks/unet/01_Setup_et_Exploration.ipynb
 ```
@@ -84,12 +84,12 @@ notebooks/unet/01_Setup_et_Exploration.ipynb
 
 **À faire:**
 1. Ouvre le notebook dans Colab
-2. Exécute chaque cellule (Ctrl+Enter ou ▶️)
+2. Exécute chaque cellule (Ctrl+Enter ou bouton Play)
 3. Laisse le notebook tourner
 
 ---
 
-#### **📌 Notebook 2: Preprocessing et Dataset** (20 min)
+#### **Notebook 2: Preprocessing et Dataset** (20 min)
 ```
 notebooks/unet/02_Preprocessing_et_Dataset.ipynb
 ```
@@ -104,7 +104,7 @@ notebooks/unet/02_Preprocessing_et_Dataset.ipynb
 
 ---
 
-#### **📌 Notebook 3: Modèle et Entraînement** (2-4 heures)
+#### **Notebook 3: Modèle et Entraînement** (2-4 heures)
 ```
 notebooks/unet/03_Modele_et_Entrainement.ipynb
 ```
@@ -118,11 +118,11 @@ notebooks/unet/03_Modele_et_Entrainement.ipynb
 2. **Laisse tourner!** (~2-4 heures avec GPU T4)
 3. Le modèle est sauvegardé dans `outputs/checkpoints/`
 
-**💡 Conseil:** Utilise Colab sur ton téléphone pendant que ça tourne!
+**Conseil:** Utilise Colab sur ton téléphone pendant que ça tourne!
 
 ---
 
-#### **📌 Notebook 4: Évaluation et Prédictions** (30 min)
+#### **Notebook 4: Évaluation et Prédictions** (30 min)
 ```
 notebooks/unet/04_Evaluation_et_Predictions.ipynb
 ```
@@ -137,7 +137,7 @@ notebooks/unet/04_Evaluation_et_Predictions.ipynb
 
 ---
 
-## ⚙️ Configuration GPU (IMPORTANT!)
+## Configuration GPU (IMPORTANT!)
 
 **Avant de lancer l'entraînement:**
 
@@ -147,13 +147,13 @@ notebooks/unet/04_Evaluation_et_Predictions.ipynb
 4. **Enregistre**
 
 ```
-✓ L'entraînement sans GPU: 30+ heures
-✓ L'entraînement avec GPU: 2-4 heures
+L'entraînement sans GPU: 30+ heures
+L'entraînement avec GPU: 2-4 heures
 ```
 
 ---
 
-## 📁 Où trouver les résultats?
+## Où trouver les résultats?
 
 Après avoir exécuté tous les notebooks:
 
@@ -161,11 +161,11 @@ Après avoir exécuté tous les notebooks:
 ISIC_Project/
 └── outputs/
     ├── checkpoints/
-    │   ├── best_model.pth          ← Meilleur modèle
-    │   └── checkpoint_last.pth     ← Dernier état
-    ├── history.json                ← Courbes d'entraînement
-    ├── test_metrics.json           ← Métriques finales
-    └── predictions/                ← Images prédites
+    ├── best_model.pth          (Meilleur modèle)
+    │   └── checkpoint_last.pth     (Dernier état)
+    ├── history.json                (Courbes d'entraînement)
+    ├── test_metrics.json           (Métriques finales)
+    └── predictions/                (Images prédites)
 ```
 
 **Récupère ces fichiers:**
@@ -174,7 +174,7 @@ ISIC_Project/
 
 ---
 
-## 🔧 Dépannage
+## Dépannage
 
 ### "ModuleNotFoundError: No module named 'torch'"
 ```python
@@ -201,7 +201,7 @@ print(torch.cuda.get_device_name(0))  # Doit afficher: Tesla T4
 
 ---
 
-## 💾 Sauvegarder sur Google Drive
+## Sauvegarder sur Google Drive
 
 **Les notebooks sauvegardent automatiquement dans:**
 ```
@@ -219,29 +219,22 @@ shutil.copy(
 
 ---
 
-## 🎯 Résumé du workflow
+## Résumé du workflow
 
 ```
-1️⃣ Préparer Drive              (5 min)
-   ↓
-2️⃣ Cloner le projet            (2 min)
-   ↓
-3️⃣ Importer les données        (10 min)
-   ↓
-4️⃣ Notebook 1: Setup           (30 min)
-   ↓
-5️⃣ Notebook 2: Preprocessing   (20 min)
-   ↓
-6️⃣ Notebook 3: Entraînement    ⏱️ 2-4 HEURES (GPU)
-   ↓
-7️⃣ Notebook 4: Évaluation      (30 min)
-   ↓
-✅ Récupérer les résultats sur Drive
+1. Préparer Drive              (5 min)
+2. Cloner le projet            (2 min)
+3. Importer les données        (10 min)
+4. Notebook 1: Setup           (30 min)
+5. Notebook 2: Preprocessing   (20 min)
+6. Notebook 3: Entraînement    2-4 HEURES (GPU)
+7. Notebook 4: Évaluation      (30 min)
+8. Récupérer les résultats sur Drive
 ```
 
 ---
 
-## 📞 Besoin d'aide?
+## Besoin d'aide?
 
 Si tu as un problème:
 1. **Vérifie le chemin** des dossiers sur Drive
@@ -251,7 +244,7 @@ Si tu as un problème:
 
 ---
 
-## 🎓 Optimisations avancées
+## Optimisations avancées
 
 ### Batch Size plus grand (plus rapide)
 ```python
@@ -273,4 +266,4 @@ CONFIG['num_epochs'] = 50  # Au lieu de 20
 
 ---
 
-**Bon entraînement! 🚀**
+**Bon entraînement!**
