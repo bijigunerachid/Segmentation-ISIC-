@@ -89,149 +89,299 @@ BENCHMARK = {
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="ISIC Skin Lesion Segmentation",
-    page_icon=None,
+    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 _download_checkpoints()   # no-op locally; auto-downloads on Streamlit Cloud if HF_REPO is set
 
-# ── CSS — uses Streamlit theme variables so light & dark both work ─────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* ── Typography ─────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ── Base ────────────────────────────────────────────────── */
 html, body, [class*="css"] {
-    font-family: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 .main .block-container {
-    padding-top: 1.5rem;
-    padding-bottom: 3rem;
-    max-width: 1280px;
+    padding-top: 1.8rem;
+    padding-bottom: 4rem;
+    max-width: 1300px;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────── */
+/* ── Sidebar shell ───────────────────────────────────────── */
 [data-testid="stSidebar"] {
-    border-right: 1px solid rgba(128,128,128,0.15);
+    border-right: 1px solid rgba(128,128,128,0.08);
 }
-[data-testid="stSidebar"] > div:first-child {
-    padding-top: 1.5rem;
+[data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; }
+
+/* ── Sidebar logo header ─────────────────────────────────── */
+.sb-header {
+    padding: 1.6rem 1.2rem 1.1rem;
+    border-bottom: 1px solid rgba(128,128,128,0.1);
+    margin-bottom: 0.5rem;
+}
+.sb-icon-wrap {
+    width: 44px; height: 44px;
+    background: var(--primary-color);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+    margin-bottom: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.15);
+}
+.sb-title {
+    font-size: 0.95rem; font-weight: 800;
+    color: var(--text-color);
+    letter-spacing: -0.02em; line-height: 1.2;
+}
+.sb-sub {
+    font-size: 0.66rem; color: var(--text-color);
+    opacity: 0.38; margin-top: 4px; letter-spacing: 0.02em;
+}
+
+/* ── Nav label ───────────────────────────────────────────── */
+.sb-nav-label {
+    font-size: 0.6rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    color: var(--text-color); opacity: 0.35;
+    padding: 0.9rem 1.2rem 0.4rem;
+}
+
+/* ── Transform st.radio → nav pills ─────────────────────── */
+[data-testid="stSidebar"] div[data-testid="stRadio"] > div {
+    gap: 2px !important;
+    padding: 0 0.6rem;
+}
+
+/* Hide the radio circle dot */
+[data-testid="stSidebar"] div[data-testid="stRadio"] label > div:first-child {
+    display: none !important;
+}
+
+/* Each nav item */
+[data-testid="stSidebar"] div[data-testid="stRadio"] label {
+    border-radius: 10px !important;
+    padding: 9px 14px !important;
+    margin: 1px 0 !important;
+    cursor: pointer !important;
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    transition: background 0.15s ease !important;
+}
+
+/* Nav item text */
+[data-testid="stSidebar"] div[data-testid="stRadio"] label p {
+    font-size: 0.86rem !important;
+    font-weight: 500 !important;
+    color: var(--text-color) !important;
+    opacity: 0.65 !important;
+}
+
+/* Hover */
+[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {
+    background: rgba(128,128,128,0.08) !important;
+}
+[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover p {
+    opacity: 0.9 !important;
+}
+
+/* Active nav item — targets checked radio */
+[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) {
+    background: var(--primary-color) !important;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.15) !important;
+}
+[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) p {
+    color: white !important;
+    opacity: 1 !important;
+    font-weight: 600 !important;
+}
+
+/* ── Device info footer ──────────────────────────────────── */
+.sb-footer {
+    padding: 0.9rem 1.2rem;
+    border-top: 1px solid rgba(128,128,128,0.08);
+    margin-top: 1rem;
+}
+.sb-footer-row {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.69rem; color: var(--text-color);
+    opacity: 0.4; margin-bottom: 5px;
+}
+.sb-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #22c55e; flex-shrink: 0;
+    box-shadow: 0 0 5px #22c55e;
+}
+
+/* ── Page hero ───────────────────────────────────────────── */
+.hero-banner {
+    background: var(--secondary-background-color);
+    border: 1px solid rgba(128,128,128,0.1);
+    border-radius: 16px;
+    padding: 2.2rem 2.5rem;
+    margin-bottom: 2rem;
+}
+.hero-banner .hero-tag {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: rgba(128,128,128,0.1);
+    color: var(--text-color);
+    opacity: 0.7;
+    margin-bottom: 12px;
+}
+.hero-banner .hero-title {
+    font-size: 1.9rem;
+    font-weight: 800;
+    color: var(--text-color);
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    margin: 0 0 10px;
+}
+.hero-banner .hero-sub {
+    font-size: 0.92rem;
+    color: var(--text-color);
+    opacity: 0.6;
+    max-width: 580px;
+    line-height: 1.6;
+    margin: 0;
 }
 
 /* ── Section label ───────────────────────────────────────── */
 .sec-label {
-    font-size: 0.68rem;
+    font-size: 0.64rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
     color: var(--text-color);
-    opacity: 0.45;
-    margin: 1.6rem 0 0.5rem;
-    padding-bottom: 4px;
-    border-bottom: 1px solid rgba(128,128,128,0.18);
+    opacity: 0.5;
+    margin: 2rem 0 0.8rem;
+    padding-left: 10px;
+    border-left: 3px solid var(--primary-color);
 }
 
 /* ── Stat card ───────────────────────────────────────────── */
 .stat-card {
     background: var(--secondary-background-color);
-    border: 1px solid rgba(128,128,128,0.18);
-    border-radius: 8px;
-    padding: 1rem 0.75rem;
+    border: 1px solid rgba(128,128,128,0.1);
+    border-radius: 14px;
+    padding: 1.3rem 1rem;
     text-align: center;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.stat-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 32px rgba(0,0,0,0.09);
 }
 .stat-card .s-val {
-    font-size: 1.75rem;
-    font-weight: 700;
+    font-size: 1.95rem;
+    font-weight: 800;
     color: var(--primary-color);
-    line-height: 1.1;
+    line-height: 1.05;
     display: block;
+    letter-spacing: -0.03em;
 }
-.stat-card .s-val.best {
-    color: #16a34a;
-}
+.stat-card .s-val.best { color: #16a34a; }
 .stat-card .s-lbl {
-    font-size: 0.68rem;
+    font-size: 0.64rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.1em;
     color: var(--text-color);
-    opacity: 0.55;
-    margin-top: 4px;
+    opacity: 0.48;
+    margin-top: 6px;
     display: block;
 }
 
 /* ── Image caption ───────────────────────────────────────── */
 .img-cap {
     text-align: center;
-    font-size: 0.72rem;
+    font-size: 0.67rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     color: var(--text-color);
-    opacity: 0.55;
-    margin-top: 4px;
+    opacity: 0.42;
+    margin-top: 6px;
 }
 
 /* ── Model card ──────────────────────────────────────────── */
 .model-card {
     background: var(--secondary-background-color);
-    border: 1px solid rgba(128,128,128,0.18);
-    border-left: 3px solid var(--primary-color);
-    border-radius: 6px;
-    padding: 0.85rem 1rem;
-    margin-bottom: 0.6rem;
+    border: 1px solid rgba(128,128,128,0.1);
+    border-left: 4px solid var(--primary-color);
+    border-radius: 0 14px 14px 0;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.model-card:hover {
+    transform: translateX(4px);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.08);
 }
 .model-card .m-name {
-    font-size: 0.95rem;
+    font-size: 0.98rem;
     font-weight: 700;
     color: var(--text-color);
+    letter-spacing: -0.01em;
 }
 .model-card .m-desc {
-    font-size: 0.8rem;
+    font-size: 0.79rem;
     color: var(--text-color);
-    opacity: 0.65;
-    margin-top: 3px;
+    opacity: 0.58;
+    margin-top: 4px;
+    line-height: 1.45;
 }
 .model-card .m-score {
-    font-size: 0.78rem;
-    font-weight: 600;
+    font-size: 0.79rem;
+    font-weight: 700;
     color: var(--primary-color);
-    margin-top: 6px;
+    margin-top: 8px;
 }
 .model-card .m-arch {
-    font-size: 0.72rem;
+    font-size: 0.69rem;
     color: var(--text-color);
-    opacity: 0.45;
+    opacity: 0.38;
     margin-top: 2px;
 }
 
 /* ── Info row ────────────────────────────────────────────── */
 .info-row {
     display: flex;
-    gap: 0;
-    border-bottom: 1px solid rgba(128,128,128,0.12);
-    padding: 5px 0;
-    font-size: 0.84rem;
+    border-bottom: 1px solid rgba(128,128,128,0.09);
+    padding: 7px 4px;
+    font-size: 0.83rem;
+    transition: background 0.1s;
 }
+.info-row:hover { background: rgba(128,128,128,0.04); border-radius: 6px; }
 .info-row .ik {
     width: 44%;
     font-weight: 600;
     color: var(--text-color);
-    opacity: 0.75;
+    opacity: 0.65;
 }
 .info-row .iv {
     color: var(--text-color);
     opacity: 0.9;
+    font-weight: 500;
 }
 
 /* ── Disclaimer ──────────────────────────────────────────── */
 .disclaimer {
-    font-size: 0.72rem;
+    font-size: 0.69rem;
     color: var(--text-color);
-    opacity: 0.4;
-    border-top: 1px solid rgba(128,128,128,0.18);
-    padding-top: 1.2rem;
-    margin-top: 3rem;
+    opacity: 0.32;
+    border-top: 1px solid rgba(128,128,128,0.1);
+    padding-top: 1.5rem;
+    margin-top: 4rem;
     text-align: center;
-    font-style: italic;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -606,17 +756,46 @@ def build_curve_fig(histories: dict, dark: bool) -> plt.Figure:
 # Sidebar
 # ═════════════════════════════════════════════════════════════════════════════
 
+_NAV_ICONS = {
+    "Home":       "🏠",
+    "Prediction": "⚡",
+    "Comparison": "⚖",
+    "Metrics":    "📊",
+}
+
 def sidebar() -> str:
     with st.sidebar:
-        st.markdown("### ISIC Segmentation")
-        st.caption("ISIC 2018 · Task 1 · Deep Learning")
-        st.divider()
-        page = st.radio("", ["Home","Prediction","Comparison","Metrics"],
+        # ── Header ────────────────────────────────────────────
+        st.markdown("""
+        <div class="sb-header">
+            <div class="sb-icon-wrap">🔬</div>
+            <div class="sb-title">ISIC Segmentation</div>
+            <div class="sb-sub">ISIC 2018 &nbsp;·&nbsp; Task 1 &nbsp;·&nbsp; Deep Learning</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Nav label ─────────────────────────────────────────
+        st.markdown('<div class="sb-nav-label">Navigation</div>',
+                    unsafe_allow_html=True)
+
+        page = st.radio("nav", list(_NAV_ICONS.keys()),
                         label_visibility="collapsed")
-        st.divider()
-        dev = "GPU — "+torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-        st.caption(f"Device: {dev}")
-        st.caption(f"PyTorch {torch.__version__}")
+
+        # ── Footer ────────────────────────────────────────────
+        dev  = ("GPU — " + torch.cuda.get_device_name(0)
+                if torch.cuda.is_available() else "CPU")
+        gpu  = torch.cuda.is_available()
+        st.markdown(
+            f'<div class="sb-footer">'
+            f'<div class="sb-footer-row">'
+            f'<div class="sb-dot" style="background:{"#22c55e" if gpu else "#94a3b8"};'
+            f'box-shadow:{"0 0 5px #22c55e" if gpu else "none"}"></div>'
+            f'{dev}</div>'
+            f'<div class="sb-footer-row" style="margin-bottom:0">'
+            f'PyTorch&nbsp;{torch.__version__}</div>'
+            f'</div>',
+            unsafe_allow_html=True)
+
     return page
 
 
@@ -625,12 +804,16 @@ def sidebar() -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_home():
-    st.title("ISIC Skin Lesion Segmentation System")
-    st.markdown(
-        "Automatic pixel-wise segmentation of dermoscopic images using deep learning "
-        "models trained on the **ISIC 2018 Task 1** benchmark dataset."
-    )
-    st.divider()
+    st.markdown("""
+    <div class="hero-banner">
+        <div class="hero-tag">Research Project &nbsp;·&nbsp; ISIC 2018 Task 1</div>
+        <div class="hero-title">Skin Lesion Segmentation</div>
+        <p class="hero-sub">
+            Automatic pixel-wise segmentation of dermoscopic images using three deep learning
+            architectures trained on the ISIC 2018 benchmark dataset.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
     col_left, col_right = st.columns([3, 2], gap="large")
 
