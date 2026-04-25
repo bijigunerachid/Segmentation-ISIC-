@@ -1,7 +1,7 @@
 torch
 torchvision
 albumentations
-opencv-python
+opencv-python-headless
 numpy
 matplotlib
 scikit-learn
