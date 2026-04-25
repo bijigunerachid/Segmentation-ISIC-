@@ -1,14 +1,8 @@
 """
-ISIC Skin Lesion Segmentation System
-Streamlit Web Application
+ISIC Skin Lesion Segmentation System — Streamlit Application
 """
 
-import os
-import sys
-import json
-import time
-import warnings
-import tempfile
+import os, sys, json, time, warnings, tempfile
 from io import BytesIO
 
 import cv2
@@ -16,128 +10,226 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import torch
-import torch.nn.functional as F
+import torch, torch.nn as nn, torch.nn.functional as F
+import torchvision.models.segmentation as seg_models
 from PIL import Image
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import pandas as pd
 import streamlit as st
 
 warnings.filterwarnings("ignore")
 
-# ─── Path Setup ───────────────────────────────────────────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
+from src.utils import dice_score, iou_score  # noqa: E402
 
-from src.model import UNet, SegNet, DeepLabV3
-from src.utils import dice_score, iou_score
-
-# ─── Constants ────────────────────────────────────────────────────────────────
-IMG_SIZE = 256
+# ── Constants ─────────────────────────────────────────────────────────────────
+IMG_SIZE      = 256
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD  = (0.229, 0.224, 0.225)
 
 DEFAULT_CHECKPOINTS = {
-    "U-Net":     os.path.join(BASE_DIR, "models", "best_unet_isic.pth"),
-    "SegNet":    os.path.join(BASE_DIR, "models", "checkpoints", "best_model.pth"),
-    "DeepLabV3": os.path.join(BASE_DIR, "models", "checkpoints", "best_model.pth"),
+    "U-Net":     os.path.join(BASE_DIR, "models",   "best_unet_isic.pth"),
+    "SegNet":    os.path.join(BASE_DIR, "outputs",  "segnet",    "best_segnet.pth"),
+    "DeepLabV3": os.path.join(BASE_DIR, "outputs",  "deeplabv3", "best_deeplabv3_isic.pth"),
+}
+METRICS_FILES = {
+    "U-Net":     os.path.join(BASE_DIR, "outputs", "test_metrics.json"),
+    "SegNet":    os.path.join(BASE_DIR, "outputs", "segnet",    "conclusion_segnet.json"),
+    "DeepLabV3": os.path.join(BASE_DIR, "outputs", "deeplabv3", "test_metrics.json"),
+}
+HISTORY_FILES = {
+    "SegNet":    os.path.join(BASE_DIR, "outputs", "segnet",    "metrics_segnet.json"),
+    "DeepLabV3": os.path.join(BASE_DIR, "outputs", "deeplabv3", "test_metrics.json"),
+}
+CONFUSION_DIR = os.path.join(BASE_DIR, "outputs", "confusion_matrix")
+DEVICE        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ── Hugging Face auto-download ─────────────────────────────────────────────────
+# Set HF_REPO to your Hugging Face model repo, e.g. "yourname/isic-models"
+# Files in that repo must be named exactly as in HF_MODEL_FILES below.
+# Leave HF_REPO = "" to disable auto-download (models must be present locally).
+HF_REPO = os.environ.get("HF_REPO", "")   # set via Streamlit secrets or env var
+
+HF_MODEL_FILES = {
+    "U-Net":     ("models/best_unet_isic.pth",              "best_unet_isic.pth"),
+    "SegNet":    ("outputs/segnet/best_segnet.pth",          "best_segnet.pth"),
+    "DeepLabV3": ("outputs/deeplabv3/best_deeplabv3_isic.pth","best_deeplabv3_isic.pth"),
 }
 
-OUTPUTS_DIR     = os.path.join(BASE_DIR, "outputs")
-METRICS_FILE    = os.path.join(OUTPUTS_DIR, "test_metrics.json")
-CURVES_FILE     = os.path.join(OUTPUTS_DIR, "training_curves.png")
-CONFUSION_DIR   = os.path.join(OUTPUTS_DIR, "confusion_matrix")
+@st.cache_resource(show_spinner=False)
+def _download_checkpoints():
+    if not HF_REPO:
+        return
+    try:
+        from huggingface_hub import hf_hub_download
+        token = os.environ.get("HF_TOKEN", None)
+        for name, (local_rel, hf_file) in HF_MODEL_FILES.items():
+            local_abs = os.path.join(BASE_DIR, local_rel)
+            if os.path.isfile(local_abs):
+                continue
+            os.makedirs(os.path.dirname(local_abs), exist_ok=True)
+            with st.spinner(f"Downloading {name} from Hugging Face…"):
+                hf_hub_download(repo_id=HF_REPO, filename=hf_file,
+                                local_dir=os.path.dirname(local_abs), token=token)
+    except Exception as e:
+        st.warning(f"Model download skipped: {e}")
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-MODEL_PARAMS = {
-    "U-Net":     "31.0 M",
-    "SegNet":    "29.4 M",
-    "DeepLabV3": "39.6 M",
+BENCHMARK = {
+    "U-Net":     {"Dice": 0.8664, "IoU": 0.7899, "Precision": 0.9014, "Recall": 0.8802,
+                  "Params": "31.0 M", "Epochs": 20},
+    "SegNet":    {"Dice": 0.8575, "IoU": 0.7762, "Precision": 0.8815, "Recall": 0.8832,
+                  "Params": "24.9 M", "Epochs": 30},
+    "DeepLabV3": {"Dice": 0.9030, "IoU": 0.8263, "Precision": 0.9251, "Recall": 0.9186,
+                  "Params": "39.6 M", "Epochs": 47},
 }
 
-# ─── Page Config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="ISIC Skin Lesion Segmentation",
     page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
+_download_checkpoints()   # no-op locally; auto-downloads on Streamlit Cloud if HF_REPO is set
 
-# ─── CSS ──────────────────────────────────────────────────────────────────────
+# ── CSS — uses Streamlit theme variables so light & dark both work ─────────────
 st.markdown("""
 <style>
+/* ── Typography ─────────────────────────────────────────── */
 html, body, [class*="css"] {
-    font-family: 'Segoe UI', Arial, sans-serif;
+    font-family: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
 }
 .main .block-container {
-    padding-top: 1.25rem;
-    padding-bottom: 2rem;
+    padding-top: 1.5rem;
+    padding-bottom: 3rem;
+    max-width: 1280px;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    border-right: 1px solid rgba(128,128,128,0.15);
 }
 [data-testid="stSidebar"] > div:first-child {
-    background-color: #f8f9fa;
-    border-right: 1px solid #e2e8f0;
+    padding-top: 1.5rem;
 }
-.section-title {
-    font-size: 0.78rem;
+
+/* ── Section label ───────────────────────────────────────── */
+.sec-label {
+    font-size: 0.68rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #64748b;
-    margin: 1.5rem 0 0.6rem 0;
+    letter-spacing: 0.12em;
+    color: var(--text-color);
+    opacity: 0.45;
+    margin: 1.6rem 0 0.5rem;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(128,128,128,0.18);
 }
-.metric-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
-    padding: 1.1rem 0.75rem;
+
+/* ── Stat card ───────────────────────────────────────────── */
+.stat-card {
+    background: var(--secondary-background-color);
+    border: 1px solid rgba(128,128,128,0.18);
+    border-radius: 8px;
+    padding: 1rem 0.75rem;
     text-align: center;
 }
-.metric-card .val {
-    font-size: 1.9rem;
+.stat-card .s-val {
+    font-size: 1.75rem;
     font-weight: 700;
-    color: #1e40af;
+    color: var(--primary-color);
     line-height: 1.1;
+    display: block;
 }
-.metric-card .lbl {
-    font-size: 0.75rem;
+.stat-card .s-val.best {
+    color: #16a34a;
+}
+.stat-card .s-lbl {
+    font-size: 0.68rem;
     font-weight: 600;
-    color: #64748b;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.07em;
+    color: var(--text-color);
+    opacity: 0.55;
+    margin-top: 4px;
+    display: block;
+}
+
+/* ── Image caption ───────────────────────────────────────── */
+.img-cap {
+    text-align: center;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-color);
+    opacity: 0.55;
     margin-top: 4px;
 }
-.img-label {
-    text-align: center;
-    font-size: 0.82rem;
+
+/* ── Model card ──────────────────────────────────────────── */
+.model-card {
+    background: var(--secondary-background-color);
+    border: 1px solid rgba(128,128,128,0.18);
+    border-left: 3px solid var(--primary-color);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.6rem;
+}
+.model-card .m-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-color);
+}
+.model-card .m-desc {
+    font-size: 0.8rem;
+    color: var(--text-color);
+    opacity: 0.65;
+    margin-top: 3px;
+}
+.model-card .m-score {
+    font-size: 0.78rem;
     font-weight: 600;
-    color: #4b5563;
-    margin-top: 5px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    color: var(--primary-color);
+    margin-top: 6px;
 }
-.info-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.88rem;
+.model-card .m-arch {
+    font-size: 0.72rem;
+    color: var(--text-color);
+    opacity: 0.45;
+    margin-top: 2px;
 }
-.info-table td {
-    padding: 5px 10px;
-    border-bottom: 1px solid #e5e7eb;
-    vertical-align: top;
+
+/* ── Info row ────────────────────────────────────────────── */
+.info-row {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid rgba(128,128,128,0.12);
+    padding: 5px 0;
+    font-size: 0.84rem;
 }
-.info-table td:first-child {
+.info-row .ik {
+    width: 44%;
     font-weight: 600;
-    color: #374151;
-    width: 42%;
-    white-space: nowrap;
+    color: var(--text-color);
+    opacity: 0.75;
 }
+.info-row .iv {
+    color: var(--text-color);
+    opacity: 0.9;
+}
+
+/* ── Disclaimer ──────────────────────────────────────────── */
 .disclaimer {
-    font-size: 0.76rem;
-    color: #9ca3af;
-    border-top: 1px solid #e5e7eb;
-    padding-top: 1rem;
-    margin-top: 2.5rem;
+    font-size: 0.72rem;
+    color: var(--text-color);
+    opacity: 0.4;
+    border-top: 1px solid rgba(128,128,128,0.18);
+    padding-top: 1.2rem;
+    margin-top: 3rem;
     text-align: center;
     font-style: italic;
 }
@@ -145,739 +237,899 @@ html, body, [class*="css"] {
 """, unsafe_allow_html=True)
 
 
-# ─── Utilities ────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def section(title: str):
-    st.markdown(f'<p class="section-title">{title}</p>', unsafe_allow_html=True)
+def sec(title: str):
+    st.markdown(f'<div class="sec-label">{title}</div>', unsafe_allow_html=True)
 
+def img_cap(text: str):
+    st.markdown(f'<div class="img-cap">{text}</div>', unsafe_allow_html=True)
 
-def metric_card(value: str, label: str):
-    return (
-        f'<div class="metric-card">'
-        f'<div class="val">{value}</div>'
-        f'<div class="lbl">{label}</div>'
-        f'</div>'
-    )
+def stat_card(val: str, lbl: str, best: bool = False):
+    cls = "s-val best" if best else "s-val"
+    return (f'<div class="stat-card"><span class="{cls}">{val}</span>'
+            f'<span class="s-lbl">{lbl}</span></div>')
 
-
-def img_label(text: str):
-    st.markdown(f'<p class="img-label">{text}</p>', unsafe_allow_html=True)
-
-
-def display_footer():
+def footer():
     st.markdown(
-        '<p class="disclaimer">This tool is for research and educational purposes only '
-        'and is not intended for clinical diagnosis.</p>',
+        '<div class="disclaimer">This tool is for research and educational '
+        'purposes only and is not intended for clinical diagnosis.</div>',
         unsafe_allow_html=True,
     )
 
+def info_row(key: str, val: str):
+    return (f'<div class="info-row"><span class="ik">{key}</span>'
+            f'<span class="iv">{val}</span></div>')
 
-def pil_to_bytes(img: Image.Image, fmt: str = "PNG") -> bytes:
-    buf = BytesIO()
-    img.save(buf, format=fmt)
-    return buf.getvalue()
-
-
-# ─── Image Processing ─────────────────────────────────────────────────────────
-
-_transform = A.Compose([
-    A.Resize(IMG_SIZE, IMG_SIZE),
-    A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ToTensorV2(),
-])
+def pil_bytes(img: Image.Image, fmt="PNG") -> bytes:
+    buf = BytesIO(); img.save(buf, format=fmt); return buf.getvalue()
 
 
-def preprocess(pil_img: Image.Image):
-    """Returns (tensor [1,3,H,W], orig_rgb ndarray [H,W,3] uint8)."""
-    img_rgb  = np.array(pil_img.convert("RGB"))
-    orig_rgb = cv2.resize(img_rgb, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-    tensor   = _transform(image=img_rgb)["image"].unsqueeze(0)
-    return tensor, orig_rgb
+# ── Model architectures (must match trained checkpoint keys) ──────────────────
+
+class _DoubleConv(nn.Module):
+    def __init__(self, ic, oc):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(ic, oc, 3, padding=1, bias=False), nn.BatchNorm2d(oc), nn.ReLU(True),
+            nn.Conv2d(oc, oc, 3, padding=1, bias=False), nn.BatchNorm2d(oc), nn.ReLU(True),
+        )
+    def forward(self, x): return self.conv(x)
+
+class _UNet(nn.Module):
+    def __init__(self, n_channels=3, n_classes=1, features=(64,128,256,512)):
+        super().__init__()
+        self.downs = nn.ModuleList(); self.ups = nn.ModuleList()
+        self.pool  = nn.MaxPool2d(2, 2)
+        ic = n_channels
+        for f in features: self.downs.append(_DoubleConv(ic, f)); ic = f
+        self.bottleneck = _DoubleConv(features[-1], features[-1]*2)
+        for f in reversed(features):
+            self.ups.append(nn.ConvTranspose2d(f*2, f, 2, 2))
+            self.ups.append(_DoubleConv(f*2, f))
+        self.final = nn.Conv2d(features[0], n_classes, 1)
+    def forward(self, x):
+        skips = []
+        for d in self.downs: x = d(x); skips.append(x); x = self.pool(x)
+        x = self.bottleneck(x); skips = skips[::-1]
+        for i in range(0, len(self.ups), 2):
+            x = self.ups[i](x); s = skips[i//2]
+            if x.shape != s.shape: x = F.interpolate(x, size=s.shape[2:])
+            x = self.ups[i+1](torch.cat([s, x], 1))
+        return self.final(x)
+
+class _SBlock(nn.Module):
+    def __init__(self, ic, oc, n=2):
+        super().__init__()
+        layers = []
+        for i in range(n):
+            layers += [nn.Conv2d(ic if i==0 else oc, oc, 3, padding=1),
+                       nn.BatchNorm2d(oc), nn.ReLU(True)]
+        self.block = nn.Sequential(*layers)
+    def forward(self, x): return self.block(x)
+
+class _SegNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=1):
+        super().__init__()
+        self.enc1=_SBlock(in_channels,64,2); self.enc2=_SBlock(64,128,2)
+        self.enc3=_SBlock(128,256,3);        self.enc4=_SBlock(256,512,3)
+        self.enc5=_SBlock(512,512,3)
+        self.dec5=_SBlock(512,512,3); self.dec4=_SBlock(512,256,3)
+        self.dec3=_SBlock(256,128,3); self.dec2=_SBlock(128,64,2)
+        self.dec1=_SBlock(64,64,2)
+        self.pool=nn.MaxPool2d(2,2,return_indices=True)
+        self.unpool=nn.MaxUnpool2d(2,2)
+        self.final=nn.Conv2d(64,out_channels,1)
+    def forward(self, x):
+        x1=self.enc1(x); x,i1=self.pool(x1)
+        x2=self.enc2(x); x,i2=self.pool(x2)
+        x3=self.enc3(x); x,i3=self.pool(x3)
+        x4=self.enc4(x); x,i4=self.pool(x4)
+        x5=self.enc5(x); x,i5=self.pool(x5)
+        x=self.unpool(x,i5,x5.size()); x=self.dec5(x)
+        x=self.unpool(x,i4,x4.size()); x=self.dec4(x)
+        x=self.unpool(x,i3,x3.size()); x=self.dec3(x)
+        x=self.unpool(x,i2,x2.size()); x=self.dec2(x)
+        x=self.unpool(x,i1,x1.size()); x=self.dec1(x)
+        return self.final(x)
+
+class _DeepLabV3(nn.Module):
+    def __init__(self, out_channels=1, pretrained=False):
+        super().__init__()
+        weights = seg_models.DeepLabV3_ResNet50_Weights.DEFAULT if pretrained else None
+        # aux_loss=True: checkpoint was always saved with the aux branch present
+        self.model = seg_models.deeplabv3_resnet50(weights=weights, aux_loss=True)
+        self.model.classifier[4] = nn.Conv2d(256, out_channels, kernel_size=1)
+    def forward(self, x):
+        out = self.model(x)["out"]
+        if out.shape[-2:] != x.shape[-2:]:
+            out = F.interpolate(out, size=x.shape[-2:], mode="bilinear", align_corners=False)
+        return out
 
 
-def create_overlay(orig_rgb: np.ndarray, binary_mask: np.ndarray, alpha: float = 0.45):
-    """Blend a red lesion highlight over the original image."""
-    orig_f   = orig_rgb.astype(np.float32)
-    red      = np.zeros_like(orig_f)
-    red[:, :, 0] = 220.0
-    mask_3   = np.stack([binary_mask] * 3, axis=-1).astype(np.float32)
-    blended  = orig_f * (1 - alpha * mask_3) + red * (alpha * mask_3)
-    return blended.clip(0, 255).astype(np.uint8)
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+_tf = A.Compose([A.Resize(IMG_SIZE,IMG_SIZE),
+                 A.Normalize(mean=IMAGENET_MEAN,std=IMAGENET_STD), ToTensorV2()])
+
+def preprocess(pil: Image.Image):
+    arr   = np.array(pil.convert("RGB"))
+    orig  = cv2.resize(arr, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+    t     = _tf(image=arr)["image"].unsqueeze(0)
+    return t, orig
+
+def overlay(rgb: np.ndarray, mask: np.ndarray, alpha=0.42):
+    f = rgb.astype(np.float32)
+    r = np.zeros_like(f); r[:,:,0] = 215.0
+    m = np.stack([mask]*3, -1).astype(np.float32)
+    return (f*(1-alpha*m) + r*(alpha*m)).clip(0,255).astype(np.uint8)
+
+def mask_pil(m: np.ndarray): return Image.fromarray((m*255).astype(np.uint8), "L")
+
+def heatmap_pil(prob: np.ndarray) -> Image.Image:
+    fig, ax = plt.subplots(figsize=(3,3), dpi=96)
+    ax.imshow(prob, cmap="magma", vmin=0, vmax=1); ax.axis("off")
+    plt.colorbar(ax.images[0], ax=ax, fraction=0.04, pad=0.02)
+    fig.tight_layout(pad=0.2)
+    buf = BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig); buf.seek(0)
+    return Image.open(buf).copy()
 
 
-def binary_to_pil(binary_mask: np.ndarray) -> Image.Image:
-    return Image.fromarray((binary_mask * 255).astype(np.uint8), mode="L")
+# ── Demo image ────────────────────────────────────────────────────────────────
+
+def make_demo_image(seed: int = 0) -> Image.Image:
+    """
+    Synthetic dermoscopic-like image for testing without real data.
+    Simulates: skin-tone background + dark oval lesion + pigment network texture.
+    """
+    rng = np.random.default_rng(seed)
+    H, W = 400, 400
+    cx, cy = W // 2 + rng.integers(-30, 30), H // 2 + rng.integers(-20, 20)
+
+    # ── Skin background ───────────────────────────────────────────────────────
+    bg = np.stack([
+        rng.normal(0.76, 0.04, (H, W)),   # R
+        rng.normal(0.58, 0.04, (H, W)),   # G
+        rng.normal(0.44, 0.04, (H, W)),   # B
+    ], axis=-1).clip(0, 1)
+
+    # Vignette (dark corners like real dermoscope)
+    Y, X = np.ogrid[:H, :W]
+    vign  = 1 - 0.35 * (((X - W/2)/(W/2))**2 + ((Y - H/2)/(H/2))**2)
+    bg   *= vign[:, :, None]
+
+    # ── Lesion mask (irregular ellipse via polar distortion) ──────────────────
+    rx = rng.integers(85, 115)
+    ry = rng.integers(70, 100)
+    angles = np.linspace(0, 2*np.pi, 360)
+    # irregular radius: sum of sinusoids
+    r_noise = (1
+               + 0.12 * np.sin(3 * angles + rng.uniform(0, 2))
+               + 0.07 * np.sin(7 * angles + rng.uniform(0, 2))
+               + 0.05 * np.sin(13 * angles))
+
+    # Build mask from the irregular ellipse
+    dx, dy = (X - cx) / rx, (Y - cy) / ry
+    base   = dx**2 + dy**2
+    ang    = np.arctan2(Y - cy, X - cx)
+    interp = np.interp(ang.ravel(), angles, r_noise).reshape(H, W)
+    lesion_mask = (base < interp**2)
+
+    # Gaussian smooth the boundary
+    from scipy.ndimage import gaussian_filter
+    lesion_soft = gaussian_filter(lesion_mask.astype(np.float32), sigma=3)
+
+    # ── Lesion colour (dark brown with internal variation) ────────────────────
+    lesion_base = np.stack([
+        rng.normal(0.28, 0.06, (H, W)),   # R
+        rng.normal(0.14, 0.04, (H, W)),   # G
+        rng.normal(0.08, 0.03, (H, W)),   # B
+    ], axis=-1).clip(0, 1)
+
+    # Pigment network: fine dark grid pattern inside lesion
+    grid  = (np.sin(X * 0.25) * np.sin(Y * 0.25))
+    grid  = (grid - grid.min()) / (grid.max() - grid.min())
+    net   = (grid < 0.3).astype(np.float32) * 0.12
+    lesion_base -= net[:, :, None]
+    lesion_base  = lesion_base.clip(0, 1)
+
+    # ── Blend skin + lesion ────────────────────────────────────────────────────
+    alpha = lesion_soft[:, :, None]
+    img   = (1 - alpha) * bg + alpha * lesion_base
+
+    # Hair artefacts (thin dark lines)
+    for _ in range(rng.integers(4, 9)):
+        x0 = rng.integers(0, W); y0 = rng.integers(0, H)
+        angle = rng.uniform(0, np.pi)
+        length = rng.integers(60, 160)
+        x1 = int(x0 + length * np.cos(angle))
+        y1 = int(y0 + length * np.sin(angle))
+        tmp = (img * 255).astype(np.uint8)
+        cv2.line(tmp, (x0, y0), (x1, y1), (20, 15, 10),
+                 thickness=rng.integers(1, 2))
+        img = tmp.astype(np.float32) / 255.0
+
+    return Image.fromarray((img.clip(0, 1) * 255).astype(np.uint8))
 
 
-def prob_to_pil(prob_map: np.ndarray) -> Image.Image:
-    return Image.fromarray((prob_map * 255).clip(0, 255).astype(np.uint8), mode="L")
+# ── Demo gallery helpers ───────────────────────────────────────────────────────
+
+DEMO_SEEDS = (0, 1, 2, 3, 4, 5, 6, 7)
+
+@st.cache_data(show_spinner=False)
+def _prerender_thumbs(seeds: tuple, size: int = 130) -> list:
+    out = []
+    for s in seeds:
+        pil = make_demo_image(seed=s).resize((size, size), Image.LANCZOS)
+        buf = BytesIO(); pil.save(buf, format="PNG"); buf.seek(0)
+        out.append(buf.getvalue())
+    return out
+
+def _demo_selector(prefix: str) -> bool:
+    """8-image thumbnail gallery. Returns True when a new image is selected."""
+    thumbs   = _prerender_thumbs(DEMO_SEEDS)
+    selected = st.session_state.get(f"{prefix}_demo_seed", None)
+    triggered = False
+
+    row1, row2 = st.columns(4, gap="small"), st.columns(4, gap="small")
+    for i, (seed, tbytes) in enumerate(zip(DEMO_SEEDS, thumbs)):
+        col = (row1 if i < 4 else row2)[i % 4]
+        with col:
+            is_sel = (selected == seed)
+            border = ("2px solid var(--primary-color)" if is_sel
+                      else "2px solid rgba(128,128,128,0.2)")
+            st.markdown(
+                f'<div style="border:{border};border-radius:8px;overflow:hidden;margin-bottom:4px">'
+                f'</div>', unsafe_allow_html=True)
+            st.image(Image.open(BytesIO(tbytes)), use_container_width=True)
+            lbl = "Selected" if is_sel else f"Seed {seed}"
+            if st.button(lbl, key=f"{prefix}_demo_{seed}",
+                         type="primary" if is_sel else "secondary",
+                         use_container_width=True):
+                demo_pil = make_demo_image(seed=seed)
+                buf = BytesIO(); demo_pil.save(buf, format="PNG"); buf.seek(0)
+                st.session_state[f"{prefix}_demo_bytes"] = buf.getvalue()
+                st.session_state[f"{prefix}_demo_seed"]  = seed
+                st.session_state[f"{prefix}_img_name"]   = f"__demo_{seed}__"
+                st.session_state.pop(f"{prefix}_res",  None)
+                st.session_state.pop(f"{prefix}_orig", None)
+                triggered = True
+    return triggered
 
 
-# ─── Model Loading ────────────────────────────────────────────────────────────
+# ── Model loading ─────────────────────────────────────────────────────────────
 
-def _parse_checkpoint(path: str):
-    ckpt = torch.load(path, map_location=DEVICE, weights_only=False)
-    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        return ckpt["model_state_dict"], {k: v for k, v in ckpt.items() if k != "model_state_dict"}
-    return ckpt, {}
-
+def _parse_ckpt(path):
+    c = torch.load(path, map_location=DEVICE, weights_only=False)
+    if isinstance(c, dict) and "model_state_dict" in c:
+        return c["model_state_dict"], {k:v for k,v in c.items() if k!="model_state_dict"}
+    return c, {}
 
 @st.cache_resource(show_spinner=False)
-def load_model(model_name: str, checkpoint_path: str):
-    """Load and cache a segmentation model. Returns (model, metadata_dict)."""
-    if model_name == "U-Net":
-        model = UNet(in_channels=3, out_channels=1)
-    elif model_name == "SegNet":
-        model = SegNet(in_channels=3, out_channels=1)
-    elif model_name == "DeepLabV3":
-        model = DeepLabV3(in_channels=3, out_channels=1, pretrained=False)
+def load_model(name: str, ckpt_path: str):
+    m = {"U-Net": _UNet, "SegNet": _SegNet}
+    if name in m:
+        model = m[name]()
+    elif name == "DeepLabV3":
+        model = _DeepLabV3(pretrained=False)
     else:
-        raise ValueError(f"Unknown model: {model_name}")
+        raise ValueError(name)
+    sd, meta = _parse_ckpt(ckpt_path)
+    model.load_state_dict(sd, strict=True)
+    return model.to(DEVICE).eval(), meta
 
-    state_dict, meta = _parse_checkpoint(checkpoint_path)
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
-    model.to(DEVICE)
-    model.eval()
-    return model, meta
-
-
-def run_inference(model: torch.nn.Module, tensor: torch.Tensor, threshold: float = 0.5):
-    """Returns (prob_map [H,W] float32, binary_mask [H,W] uint8)."""
+def infer(model, tensor, thr=0.5):
     with torch.no_grad():
-        logits = model(tensor.to(DEVICE))
-        prob   = torch.sigmoid(logits[0, 0]).cpu().numpy().astype(np.float32)
-    binary = (prob >= threshold).astype(np.uint8)
-    return prob, binary
+        prob = torch.sigmoid(model(tensor.to(DEVICE))[0,0]).cpu().numpy().astype(np.float32)
+    return prob, (prob >= thr).astype(np.uint8)
 
 
-# ─── Metrics ──────────────────────────────────────────────────────────────────
+# ── Metrics ───────────────────────────────────────────────────────────────────
 
-def compute_segmentation_metrics(pred_binary: np.ndarray, gt_pil: Image.Image, threshold: float = 0.5):
-    """Dice and IoU from a binary prediction and a GT mask PIL image."""
-    gt_np  = np.array(gt_pil.convert("L").resize((IMG_SIZE, IMG_SIZE), Image.NEAREST))
-    gt_bin = (gt_np > 127).astype(np.float32)
-    p_bin  = pred_binary.astype(np.float32)
+def full_metrics(pred_bin: np.ndarray, gt_pil: Image.Image):
+    gt  = (np.array(gt_pil.convert("L").resize((IMG_SIZE,IMG_SIZE), Image.NEAREST)) > 127).astype(np.float32)
+    p   = pred_bin.astype(np.float32); e = 1e-6
+    tp  = (p*gt).sum(); fp=(p*(1-gt)).sum(); fn=((1-p)*gt).sum()
+    return {
+        "Dice":      float((2*tp+e)/(2*tp+fp+fn+e)),
+        "IoU":       float((tp+e)/(tp+fp+fn+e)),
+        "Precision": float((tp+e)/(tp+fp+e)),
+        "Recall":    float((tp+e)/(tp+fn+e)),
+    }
 
-    intersection = (p_bin * gt_bin).sum()
-    p_sum        = p_bin.sum()
-    g_sum        = gt_bin.sum()
-    smooth       = 1e-6
-
-    dice = (2.0 * intersection + smooth) / (p_sum + g_sum + smooth)
-    iou  = (intersection + smooth) / (p_sum + g_sum - intersection + smooth)
-    return {"Dice": float(dice), "IoU": float(iou)}
+def load_history(name: str) -> dict:
+    p = HISTORY_FILES.get(name, "")
+    if not os.path.isfile(p): return {}
+    raw = json.load(open(p))
+    h   = raw.get("history", raw)
+    return {k: h[k] for k in ("train_loss","val_loss","train_dice","val_dice") if k in h}
 
 
-# ─── Checkpoint Source Widget ─────────────────────────────────────────────────
+# ── Checkpoint selector widget ─────────────────────────────────────────────────
 
-def checkpoint_selector(model_name: str, key_prefix: str = ""):
-    """Sidebar widget: returns a valid checkpoint path or None."""
-    source = st.radio(
-        "Checkpoint source",
-        ["Default path", "Upload file"],
-        index=0,
-        key=f"{key_prefix}_src",
-    )
-
-    if source == "Default path":
-        default = DEFAULT_CHECKPOINTS[model_name]
-        rel     = os.path.relpath(default, BASE_DIR)
-        exists  = os.path.isfile(default)
-        st.caption(f"`{rel}`")
-        if exists:
-            st.success("Checkpoint found")
-        else:
-            st.error("File not found — train the model or upload a checkpoint")
-        return default if exists else None
-
-    uploaded = st.file_uploader(
-        "Upload .pth file",
-        type=["pth", "pt"],
-        key=f"{key_prefix}_upload",
-    )
-    if uploaded:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pth")
-        tmp.write(uploaded.read())
-        tmp.flush()
-        return tmp.name
+def ckpt_selector(name: str, prefix: str):
+    src = st.radio("Source", ["Default path","Upload .pth"], key=f"{prefix}_src",
+                   horizontal=True)
+    if src == "Default path":
+        p = DEFAULT_CHECKPOINTS[name]
+        ok = os.path.isfile(p)
+        st.caption(f"`{os.path.relpath(p, BASE_DIR)}`")
+        st.success("Checkpoint found", icon=None) if ok else st.error("File not found")
+        return p if ok else None
+    up = st.file_uploader("Select file", type=["pth","pt"], key=f"{prefix}_up",
+                          label_visibility="collapsed")
+    if up:
+        t = tempfile.NamedTemporaryFile(delete=False, suffix=".pth")
+        t.write(up.read()); t.flush(); return t.name
     return None
 
 
+# ── Training curves plot ───────────────────────────────────────────────────────
+
+def build_curve_fig(histories: dict, dark: bool) -> plt.Figure:
+    bg   = "#0e1117" if dark else "#ffffff"
+    fg   = "#fafafa" if dark else "#111111"
+    grid = "#2a2a2a" if dark else "#e5e7eb"
+    palette = {"SegNet": "#60a5fa", "DeepLabV3": "#34d399"}
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.2), facecolor=bg)
+    for ax in axes:
+        ax.set_facecolor(bg)
+        ax.tick_params(colors=fg, labelsize=8)
+        ax.xaxis.label.set_color(fg); ax.yaxis.label.set_color(fg)
+        ax.title.set_color(fg)
+        for spine in ax.spines.values(): spine.set_edgecolor(grid)
+        ax.grid(True, color=grid, linewidth=0.6, alpha=0.7)
+        ax.set_xlabel("Epoch", fontsize=9)
+
+    for name, h in histories.items():
+        c = palette.get(name, "#a78bfa")
+        if "val_loss"  in h: axes[0].plot(h["val_loss"],  color=c, lw=2,   label=f"{name} val")
+        if "train_loss"in h: axes[0].plot(h["train_loss"],color=c, lw=1.1, ls="--", alpha=0.5)
+        if "val_dice"  in h: axes[1].plot(h["val_dice"],  color=c, lw=2,   label=f"{name} val")
+        if "train_dice"in h: axes[1].plot(h["train_dice"],color=c, lw=1.1, ls="--", alpha=0.5)
+
+    axes[0].set_title("Loss",            fontsize=10, fontweight="bold")
+    axes[1].set_title("Dice Coefficient",fontsize=10, fontweight="bold")
+    axes[0].set_ylabel("Loss",  fontsize=9); axes[1].set_ylabel("Dice", fontsize=9)
+    axes[1].set_ylim(0.70, 1.00)
+    for ax in axes:
+        leg = ax.legend(fontsize=8, framealpha=0.15)
+        for t in leg.get_texts(): t.set_color(fg)
+    fig.suptitle("Solid = Validation   ·   Dashed = Training", fontsize=8,
+                 color=fg, alpha=0.55, y=0.02)
+    fig.tight_layout(rect=[0, 0.05, 1, 1])
+    return fig
+
+
 # ═════════════════════════════════════════════════════════════════════════════
-# Page: Home
+# Sidebar
+# ═════════════════════════════════════════════════════════════════════════════
+
+def sidebar() -> str:
+    with st.sidebar:
+        st.markdown("### ISIC Segmentation")
+        st.caption("ISIC 2018 · Task 1 · Deep Learning")
+        st.divider()
+        page = st.radio("", ["Home","Prediction","Comparison","Metrics"],
+                        label_visibility="collapsed")
+        st.divider()
+        dev = "GPU — "+torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+        st.caption(f"Device: {dev}")
+        st.caption(f"PyTorch {torch.__version__}")
+    return page
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Page — Home
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_home():
     st.title("ISIC Skin Lesion Segmentation System")
     st.markdown(
-        "Automatic pixel-wise segmentation of dermoscopic skin lesion images using "
-        "deep learning models trained on the **ISIC 2018 Task 1** benchmark dataset."
+        "Automatic pixel-wise segmentation of dermoscopic images using deep learning "
+        "models trained on the **ISIC 2018 Task 1** benchmark dataset."
     )
     st.divider()
 
-    left, right = st.columns([3, 2], gap="large")
+    col_left, col_right = st.columns([3, 2], gap="large")
 
-    with left:
-        section("Overview")
-        st.markdown("""
-This system performs binary semantic segmentation of dermoscopic images, classifying
-each pixel as either lesion tissue or surrounding healthy skin. It serves as a
-research interface for evaluating and comparing deep learning segmentation approaches
-in a medical imaging context.
+    with col_left:
+        sec("System overview")
+        st.markdown(
+            "Three segmentation architectures are evaluated on **390 held-out test images** "
+            "from the ISIC 2018 dataset. All models are trained end-to-end with a combined "
+            "**Dice + Binary Cross-Entropy loss** and evaluated with Dice coefficient and IoU."
+        )
 
-Models are trained end-to-end using a combined **Dice-BCE loss**. Performance is
-quantified with the **Dice coefficient** and **Intersection over Union (IoU)**,
-the standard metrics for medical image segmentation benchmarks.
-        """)
+        sec("Benchmark — Test set (390 images · 256 × 256 px)")
+        best_dice = max(v["Dice"] for v in BENCHMARK.values())
+        best_iou  = max(v["IoU"]  for v in BENCHMARK.values())
 
-        section("Dataset")
-        device_str = "GPU — " + torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
-        st.markdown(f"""
-<table class="info-table">
-<tr><td>Dataset</td><td>ISIC 2018 — Skin Lesion Analysis Toward Melanoma Detection</td></tr>
-<tr><td>Task</td><td>Task 1 — Lesion Boundary Segmentation</td></tr>
-<tr><td>Modality</td><td>Dermoscopy (epiluminescence microscopy)</td></tr>
-<tr><td>Input format</td><td>RGB dermoscopic images, JPEG</td></tr>
-<tr><td>Output format</td><td>Binary segmentation mask (lesion / background)</td></tr>
-<tr><td>Input resolution</td><td>Resized to 256 × 256 pixels</td></tr>
-<tr><td>Normalization</td><td>ImageNet mean and standard deviation</td></tr>
-<tr><td>Loss function</td><td>Dice Loss + Binary Cross-Entropy</td></tr>
-</table>
-        """, unsafe_allow_html=True)
-
-        section("System")
-        st.markdown(f"""
-<table class="info-table">
-<tr><td>Compute device</td><td>{device_str}</td></tr>
-<tr><td>Framework</td><td>PyTorch {torch.__version__}</td></tr>
-<tr><td>Input resolution</td><td>256 × 256 px</td></tr>
-</table>
-        """, unsafe_allow_html=True)
-
-    with right:
-        section("Segmentation Models")
-
-        descriptions = {
-            "U-Net": (
-                "Encoder-decoder architecture with symmetric skip connections. "
-                "The reference standard for medical image segmentation since 2015.",
-                "Features: 64 → 128 → 256 → 512 — Params: 31.0 M"
-            ),
-            "SegNet": (
-                "VGG-style encoder paired with an index-based max-unpooling decoder. "
-                "Retains precise spatial boundary information through pooling indices.",
-                "5-stage encoder/decoder — Params: 29.4 M"
-            ),
-            "DeepLabV3": (
-                "ResNet-50 backbone with Atrous Spatial Pyramid Pooling (ASPP) for "
-                "multi-scale contextual feature extraction via dilated convolutions.",
-                "Pretrained backbone, ASPP module — Params: 39.6 M"
-            ),
+        df_data = {
+            "Model":     list(BENCHMARK.keys()),
+            "Dice":      [v["Dice"]      for v in BENCHMARK.values()],
+            "IoU":       [v["IoU"]       for v in BENCHMARK.values()],
+            "Precision": [v["Precision"] for v in BENCHMARK.values()],
+            "Recall":    [v["Recall"]    for v in BENCHMARK.values()],
+            "Params":    [v["Params"]    for v in BENCHMARK.values()],
+            "Epochs":    [v["Epochs"]    for v in BENCHMARK.values()],
         }
+        df = pd.DataFrame(df_data).set_index("Model")
 
-        for name, (desc, note) in descriptions.items():
-            with st.container(border=True):
-                st.markdown(f"**{name}**")
-                st.caption(desc)
-                st.markdown(
-                    f"<small style='color:#6b7280;font-size:0.8rem'>{note}</small>",
-                    unsafe_allow_html=True,
-                )
+        def _style(v, col):
+            if col in ("Dice","IoU","Precision","Recall"):
+                best = best_dice if col=="Dice" else (best_iou if col=="IoU" else None)
+                if best and abs(float(v)-best) < 1e-4:
+                    return "font-weight:700; color:#16a34a"
+            return ""
 
-        section("Navigation")
-        st.markdown("""
-<table class="info-table">
-<tr><td>Prediction</td><td>Run inference on a single image with a chosen model</td></tr>
-<tr><td>Comparison</td><td>Compare all three models side by side on one image</td></tr>
-<tr><td>Metrics</td><td>View evaluation results and training diagnostics</td></tr>
-</table>
-        """, unsafe_allow_html=True)
+        styled = df.style.format({"Dice":"{:.4f}","IoU":"{:.4f}",
+                                   "Precision":"{:.4f}","Recall":"{:.4f}"})
+        st.dataframe(styled, use_container_width=True)
+        st.caption("Best value per metric highlighted in the Metrics page.")
 
-    display_footer()
+        sec("Dataset")
+        rows = "".join([
+            info_row("Dataset",         "ISIC 2018 — Skin Lesion Analysis"),
+            info_row("Task",            "Task 1 — Lesion Boundary Segmentation"),
+            info_row("Total images",    "2,594  (train 1,815 · val 389 · test 390)"),
+            info_row("Modality",        "Dermoscopy (epiluminescence microscopy)"),
+            info_row("Input resolution","256 × 256 pixels"),
+            info_row("Normalisation",   "ImageNet mean and standard deviation"),
+            info_row("Loss function",   "Dice Loss + Binary Cross-Entropy"),
+        ])
+        st.markdown(f'<div style="margin-top:4px">{rows}</div>', unsafe_allow_html=True)
+
+    with col_right:
+        sec("Models")
+
+        descs = {
+            "U-Net": ("Encoder-decoder with symmetric skip connections. "
+                      "Reference standard for medical image segmentation since 2015.",
+                      "Features: 64→128→256→512"),
+            "SegNet": ("VGG-style encoder with index-based max-unpooling. "
+                       "Retains precise spatial boundaries through pooling indices.",
+                       "5-stage encoder / decoder"),
+            "DeepLabV3": ("ResNet-50 backbone with Atrous Spatial Pyramid Pooling. "
+                          "Best performer on this benchmark.",
+                          "Dilated convolutions · ASPP module"),
+        }
+        for name, (desc, arch) in descs.items():
+            b = BENCHMARK[name]
+            st.markdown(
+                f'<div class="model-card">'
+                f'<div class="m-name">{name}</div>'
+                f'<div class="m-desc">{desc}</div>'
+                f'<div class="m-score">Dice {b["Dice"]:.4f} · IoU {b["IoU"]:.4f}</div>'
+                f'<div class="m-arch">{arch} · {b["Params"]} params · {b["Epochs"]} epochs</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        sec("System")
+        dev = ("GPU — "+torch.cuda.get_device_name(0)) if torch.cuda.is_available() else "CPU"
+        rows2 = "".join([
+            info_row("Compute device", dev),
+            info_row("Framework",      f"PyTorch {torch.__version__}"),
+            info_row("Input size",     "256 × 256 px"),
+        ])
+        st.markdown(f'<div style="margin-top:4px">{rows2}</div>', unsafe_allow_html=True)
+
+    footer()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Page: Prediction
+# Page — Prediction
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_prediction():
     st.title("Prediction")
-    st.markdown(
-        "Upload a dermoscopic image, select a model and checkpoint, "
-        "then run segmentation inference."
-    )
+    st.markdown("Run segmentation inference on a single dermoscopic image.")
     st.divider()
 
-    # ── Sidebar controls ──────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("### Model")
-        model_name = st.selectbox("Architecture", ["U-Net", "SegNet", "DeepLabV3"], key="pred_model")
-        checkpoint_path = checkpoint_selector(model_name, key_prefix="pred")
-
+        model_name = st.selectbox("Architecture", ["U-Net","SegNet","DeepLabV3"], key="p_model")
+        ckpt_path  = ckpt_selector(model_name, "p")
         st.markdown("---")
-        st.markdown("### Inference Settings")
-        threshold = st.slider("Segmentation threshold", 0.10, 0.90, 0.50, 0.05, key="pred_thr")
-
+        st.markdown("### Settings")
+        thr          = st.slider("Threshold", 0.10, 0.90, 0.50, 0.05, key="p_thr")
+        show_heatmap = st.toggle("Show probability heatmap", False, key="p_hm")
         st.markdown("---")
         st.markdown("### Ground Truth (optional)")
-        st.caption("Upload a binary mask to compute Dice and IoU metrics.")
-        gt_file = st.file_uploader("Mask image", type=["png", "jpg", "jpeg"], key="pred_gt")
+        st.caption("Upload a binary mask to compute metrics.")
+        gt_file = st.file_uploader("Mask", type=["png","jpg","jpeg"],
+                                   key="p_gt", label_visibility="collapsed")
 
-    # ── Image upload ──────────────────────────────────────────────────────────
-    uploaded_img = st.file_uploader(
-        "Input dermoscopic image (JPG / PNG)",
-        type=["jpg", "jpeg", "png"],
-        key="pred_img",
-    )
+    # ── Image source ──────────────────────────────────────────────────────────
+    tab_demo, tab_upload = st.tabs(["Demo Gallery", "Upload Image"])
+    auto_run = False
+    up_file  = None
 
-    if not uploaded_img:
-        st.info("Upload an input image to begin.")
-        display_footer()
-        return
+    with tab_demo:
+        st.caption("Click any thumbnail — inference runs automatically.")
+        auto_run = _demo_selector("p")
 
-    pil_img = Image.open(uploaded_img).convert("RGB")
+    with tab_upload:
+        up_file = st.file_uploader("Dermoscopic image (JPG / PNG)",
+                                   type=["jpg","jpeg","png"], key="p_img",
+                                   label_visibility="collapsed")
+        if up_file and st.session_state.get("p_img_name") != up_file.name:
+            st.session_state.pop("p_res",       None)
+            st.session_state.pop("p_demo_bytes",None)
+            st.session_state.pop("p_demo_seed", None)
+            st.session_state["p_img_name"] = up_file.name
 
-    if not checkpoint_path:
-        st.warning("Provide a valid model checkpoint to proceed.")
-        display_footer()
-        return
+    # Resolve active image (upload takes priority)
+    active_pil: Image.Image | None = None
+    if up_file:
+        active_pil = Image.open(up_file).convert("RGB")
+    elif "p_demo_bytes" in st.session_state:
+        active_pil = Image.open(BytesIO(st.session_state["p_demo_bytes"])).convert("RGB")
 
+    if not active_pil:
+        st.info("Choose a demo image above or upload your own to begin.")
+        footer(); return
+
+    if not ckpt_path:
+        st.warning("Select or upload a valid checkpoint to proceed.")
+        footer(); return
+
+    # Auto-run on demo selection; manual button for uploads
     run_btn = st.button("Run Inference", type="primary")
+    should_run = run_btn or (auto_run and not up_file)
 
-    if run_btn:
-        with st.spinner(f"Loading {model_name} and running inference..."):
+    if should_run:
+        with st.spinner(f"Running {model_name}…"):
             try:
-                model, meta = load_model(model_name, checkpoint_path)
-                tensor, orig_rgb = preprocess(pil_img)
-                t0 = time.perf_counter()
-                prob_map, binary_mask = run_inference(model, tensor, threshold)
-                elapsed = time.perf_counter() - t0
-            except Exception as exc:
-                st.error(f"Inference failed: {exc}")
-                display_footer()
-                return
+                model, meta  = load_model(model_name, ckpt_path)
+                tensor, orig = preprocess(active_pil)
+                t0           = time.perf_counter()
+                prob, binary = infer(model, tensor, thr)
+                elapsed      = time.perf_counter() - t0
+                st.session_state["p_res"] = dict(
+                    orig=orig, prob=prob, binary=binary,
+                    elapsed=elapsed, meta=meta, model=model_name)
+            except Exception as e:
+                st.error(f"Inference error: {e}"); footer(); return
 
-        st.session_state["pred_result"] = {
-            "orig_rgb":    orig_rgb,
-            "prob_map":    prob_map,
-            "binary_mask": binary_mask,
-            "elapsed":     elapsed,
-            "meta":        meta,
-            "model_name":  model_name,
-        }
+    if "p_res" not in st.session_state:
+        footer(); return
 
-    if "pred_result" not in st.session_state:
-        display_footer()
-        return
+    res    = st.session_state["p_res"]
+    orig   = res["orig"]; prob = res["prob"]; binary = res["binary"]
+    ov     = overlay(orig, binary)
+    meta   = res["meta"]
 
-    res         = st.session_state["pred_result"]
-    orig_rgb    = res["orig_rgb"]
-    prob_map    = res["prob_map"]
-    binary_mask = res["binary_mask"]
-    elapsed     = res["elapsed"]
-    meta        = res["meta"]
-    overlay     = create_overlay(orig_rgb, binary_mask)
+    # ── Images ────────────────────────────────────────────────────────────────
+    sec("Segmentation Results")
+    n    = 4 if show_heatmap else 3
+    cols = st.columns(n, gap="small")
+    with cols[0]: st.image(orig,               use_container_width=True); img_cap("Input")
+    with cols[1]: st.image(mask_pil(binary),   use_container_width=True); img_cap("Predicted Mask")
+    with cols[2]: st.image(Image.fromarray(ov),use_container_width=True); img_cap("Overlay")
+    if show_heatmap:
+        with cols[3]: st.image(heatmap_pil(prob), use_container_width=True); img_cap("Probability Map")
 
-    # ── Results display ───────────────────────────────────────────────────────
-    section("Segmentation Results")
-    c1, c2, c3 = st.columns(3, gap="medium")
-    with c1:
-        st.image(orig_rgb, use_container_width=True)
-        img_label("Input Image")
-    with c2:
-        st.image(binary_to_pil(binary_mask), use_container_width=True)
-        img_label("Predicted Mask")
-    with c3:
-        st.image(Image.fromarray(overlay), use_container_width=True)
-        img_label("Overlay")
+    # ── Stats ─────────────────────────────────────────────────────────────────
+    sec("Inference Statistics")
+    pct = 100.0 * binary.sum() / binary.size
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    c1.metric("Inference time", f"{res['elapsed']*1000:.1f} ms")
+    c2.metric("Lesion area",    f"{pct:.1f}%")
+    c3.metric("Lesion pixels",  f"{int(binary.sum()):,}")
+    c4.metric("Max confidence", f"{prob.max():.3f}")
 
-    # ── Statistics ────────────────────────────────────────────────────────────
-    section("Prediction Statistics")
-    lesion_px  = int(binary_mask.sum())
-    total_px   = binary_mask.size
-    lesion_pct = 100.0 * lesion_px / total_px
-    max_conf   = float(prob_map.max())
+    bar_w = min(int(pct), 100)
+    st.markdown(
+        f'<div style="margin-top:6px">'
+        f'<div style="font-size:.68rem;font-weight:700;text-transform:uppercase;'
+        f'letter-spacing:.1em;opacity:.45;margin-bottom:5px">Lesion Coverage</div>'
+        f'<div style="background:var(--secondary-background-color);border-radius:20px;'
+        f'height:10px;overflow:hidden;border:1px solid rgba(128,128,128,.15)">'
+        f'<div style="background:var(--primary-color);width:{bar_w}%;height:100%;'
+        f'border-radius:20px"></div></div>'
+        f'<div style="font-size:.7rem;opacity:.4;margin-top:3px">'
+        f'{pct:.2f}% of image area classified as lesion</div></div>',
+        unsafe_allow_html=True)
 
-    s1, s2, s3, s4 = st.columns(4, gap="medium")
-    for col, val, lbl in [
-        (s1, f"{elapsed * 1000:.1f} ms", "Inference time"),
-        (s2, f"{lesion_pct:.1f}%",       "Lesion area"),
-        (s3, f"{lesion_px:,}",            "Lesion pixels"),
-        (s4, f"{max_conf:.3f}",           "Max confidence"),
-    ]:
-        with col:
-            st.markdown(metric_card(val, lbl), unsafe_allow_html=True)
-
-    # ── Ground truth metrics ──────────────────────────────────────────────────
+    # ── GT metrics ────────────────────────────────────────────────────────────
     if gt_file:
-        gt_pil  = Image.open(gt_file)
-        metrics = compute_segmentation_metrics(binary_mask, gt_pil, threshold)
-        section("Evaluation Metrics")
-        m1, m2, _, _ = st.columns(4, gap="medium")
-        with m1:
-            st.markdown(metric_card(f"{metrics['Dice']:.4f}", "Dice Coefficient"), unsafe_allow_html=True)
-        with m2:
-            st.markdown(metric_card(f"{metrics['IoU']:.4f}", "IoU Score"), unsafe_allow_html=True)
+        m = full_metrics(binary, Image.open(gt_file))
+        sec("Evaluation vs Ground Truth")
+        mc1, mc2, mc3, mc4 = st.columns(4, gap="small")
+        mc1.metric("Dice",      f"{m['Dice']:.4f}")
+        mc2.metric("IoU",       f"{m['IoU']:.4f}")
+        mc3.metric("Precision", f"{m['Precision']:.4f}")
+        mc4.metric("Recall",    f"{m['Recall']:.4f}")
 
-    # ── Checkpoint metadata ───────────────────────────────────────────────────
+    # ── Checkpoint info ───────────────────────────────────────────────────────
     if meta:
-        with st.expander("Checkpoint information"):
-            rows = []
-            if "epoch" in meta:
-                rows.append(f"<tr><td>Epoch</td><td>{meta['epoch']}</td></tr>")
-            if "val_dice" in meta:
-                rows.append(f"<tr><td>Val Dice (saved)</td><td>{meta['val_dice']:.4f}</td></tr>")
-            if "val_iou" in meta:
-                rows.append(f"<tr><td>Val IoU (saved)</td><td>{meta['val_iou']:.4f}</td></tr>")
-            if "config" in meta and isinstance(meta["config"], dict):
-                cfg = meta["config"]
-                if "img_size" in cfg:
-                    rows.append(f"<tr><td>Training image size</td><td>{cfg['img_size']}</td></tr>")
-                if "learning_rate" in cfg:
-                    rows.append(f"<tr><td>Learning rate</td><td>{cfg['learning_rate']}</td></tr>")
-            if rows:
-                st.markdown(
-                    f'<table class="info-table">{"".join(rows)}</table>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.caption("No structured metadata available in this checkpoint.")
+        with st.expander("Checkpoint details"):
+            cols_m = st.columns(3, gap="small")
+            if "epoch"    in meta: cols_m[0].metric("Epoch",    meta["epoch"])
+            if "val_dice" in meta: cols_m[1].metric("Val Dice", f"{meta['val_dice']:.4f}")
+            if "val_iou"  in meta: cols_m[2].metric("Val IoU",  f"{meta['val_iou']:.4f}")
 
-    # ── Export ────────────────────────────────────────────────────────────────
-    section("Export")
-    d1, d2 = st.columns(2, gap="medium")
-    with d1:
-        st.download_button(
-            "Download Predicted Mask",
-            data=pil_to_bytes(binary_to_pil(binary_mask)),
-            file_name="predicted_mask.png",
-            mime="image/png",
-            use_container_width=True,
-        )
-    with d2:
-        st.download_button(
-            "Download Overlay",
-            data=pil_to_bytes(Image.fromarray(overlay)),
-            file_name="overlay.png",
-            mime="image/png",
-            use_container_width=True,
-        )
+    # ── Downloads ─────────────────────────────────────────────────────────────
+    sec("Export")
+    dc1, dc2 = st.columns(2, gap="small")
+    dc1.download_button("Download Mask",    pil_bytes(mask_pil(binary)),
+                        "mask.png","image/png", use_container_width=True)
+    dc2.download_button("Download Overlay", pil_bytes(Image.fromarray(ov)),
+                        "overlay.png","image/png", use_container_width=True)
 
-    display_footer()
+    footer()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Page: Comparison
+# Page — Comparison
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_comparison():
     st.title("Model Comparison")
-    st.markdown(
-        "Upload a single dermoscopic image to run all three models simultaneously "
-        "and compare their segmentation outputs side by side."
-    )
+    st.markdown("Compare all three models on a single image.")
     st.divider()
 
     with st.sidebar:
-        st.markdown("### Checkpoint Paths")
+        st.markdown("### Checkpoints")
         ckpt_paths = {}
-        for name in ["U-Net", "SegNet", "DeepLabV3"]:
-            with st.expander(name, expanded=(name == "U-Net")):
-                default = DEFAULT_CHECKPOINTS[name]
-                exists  = os.path.isfile(default)
-                rel     = os.path.relpath(default, BASE_DIR)
-                st.caption(f"`{rel}`")
-                if exists:
-                    st.success("Found")
-                    ckpt_paths[name] = default
-                else:
-                    st.warning("Not found")
-                    up = st.file_uploader(f"Upload {name} .pth", type=["pth", "pt"], key=f"cmp_{name}")
+        for name in ["U-Net","SegNet","DeepLabV3"]:
+            p, ok = DEFAULT_CHECKPOINTS[name], os.path.isfile(DEFAULT_CHECKPOINTS[name])
+            if ok: ckpt_paths[name] = p
+            status = "found" if ok else "missing — upload below"
+            with st.expander(f"{name}  [{status}]", expanded=not ok):
+                st.caption(f"`{os.path.relpath(p, BASE_DIR)}`")
+                if not ok:
+                    up = st.file_uploader(f"{name} checkpoint",
+                                          type=["pth","pt"], key=f"c_{name}",
+                                          label_visibility="collapsed")
                     if up:
-                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pth")
-                        tmp.write(up.read())
-                        tmp.flush()
-                        ckpt_paths[name] = tmp.name
-
+                        t = tempfile.NamedTemporaryFile(delete=False, suffix=".pth")
+                        t.write(up.read()); t.flush(); ckpt_paths[name] = t.name
         st.markdown("---")
-        threshold = st.slider("Segmentation threshold", 0.10, 0.90, 0.50, 0.05, key="cmp_thr")
+        thr = st.slider("Threshold", 0.10, 0.90, 0.50, 0.05, key="c_thr")
 
-    uploaded_img = st.file_uploader(
-        "Input dermoscopic image (JPG / PNG)",
-        type=["jpg", "jpeg", "png"],
-        key="cmp_img",
-    )
+    # ── Image source ──────────────────────────────────────────────────────────
+    tab_demo, tab_upload = st.tabs(["Demo Gallery", "Upload Image"])
+    auto_run = False
+    up_file  = None
 
-    if not uploaded_img:
-        st.info("Upload an image to begin.")
-        display_footer()
-        return
+    with tab_demo:
+        st.caption("Click any thumbnail — all three models run automatically.")
+        auto_run = _demo_selector("c")
+
+    with tab_upload:
+        up_file = st.file_uploader("Dermoscopic image (JPG / PNG)",
+                                   type=["jpg","jpeg","png"], key="c_img",
+                                   label_visibility="collapsed")
+        if up_file and st.session_state.get("c_img_name") != up_file.name:
+            st.session_state.pop("c_res",       None)
+            st.session_state.pop("c_orig",      None)
+            st.session_state.pop("c_demo_bytes",None)
+            st.session_state.pop("c_demo_seed", None)
+            st.session_state["c_img_name"] = up_file.name
+
+    # Resolve active image (upload takes priority)
+    active_pil: Image.Image | None = None
+    if up_file:
+        active_pil = Image.open(up_file).convert("RGB")
+    elif "c_demo_bytes" in st.session_state:
+        active_pil = Image.open(BytesIO(st.session_state["c_demo_bytes"])).convert("RGB")
+
+    if not active_pil:
+        st.info("Choose a demo image above or upload your own.")
+        footer(); return
 
     available = {k: v for k, v in ckpt_paths.items() if os.path.isfile(v)}
     if not available:
-        st.warning("No valid checkpoints found. Provide at least one checkpoint in the sidebar.")
-        display_footer()
-        return
+        st.warning("No valid checkpoints available."); footer(); return
 
-    pil_img = Image.open(uploaded_img).convert("RGB")
-    run_btn = st.button("Run All Models", type="primary")
+    run_btn    = st.button("Run All Models", type="primary")
+    should_run = run_btn or (auto_run and not up_file)
 
-    if run_btn:
-        tensor, orig_rgb = preprocess(pil_img)
-        results = {}
-
-        progress = st.progress(0, text="Running inference...")
-        n_models = len(available)
-
+    if should_run:
+        tensor, orig = preprocess(active_pil)
+        results, bar = {}, st.progress(0, text="Starting…")
         for i, (name, ckpt) in enumerate(available.items()):
-            progress.progress((i) / n_models, text=f"Running {name}...")
+            bar.progress(i / len(available), text=f"Running {name}…")
             try:
                 model, _ = load_model(name, ckpt)
-                t0       = time.perf_counter()
-                prob, binary = run_inference(model, tensor, threshold)
-                elapsed  = time.perf_counter() - t0
-                results[name] = {
-                    "prob":    prob,
-                    "binary":  binary,
-                    "overlay": create_overlay(orig_rgb, binary),
-                    "elapsed": elapsed,
-                }
-            except Exception as exc:
-                results[name] = {"error": str(exc)}
+                t0 = time.perf_counter()
+                prob, binary = infer(model, tensor, thr)
+                results[name] = dict(prob=prob, binary=binary,
+                                     ov=overlay(orig, binary),
+                                     elapsed=time.perf_counter() - t0)
+            except Exception as e:
+                results[name] = {"error": str(e)}
+        bar.progress(1.0, text="Done.")
+        st.session_state["c_res"]  = results
+        st.session_state["c_orig"] = orig
 
-        progress.progress(1.0, text="Done.")
-        st.session_state["cmp_results"]  = results
-        st.session_state["cmp_orig_rgb"] = orig_rgb
+    if "c_res" not in st.session_state:
+        footer(); return
 
-    if "cmp_results" not in st.session_state:
-        display_footer()
-        return
+    results = st.session_state["c_res"]
+    orig    = st.session_state["c_orig"]
+    ok_res  = {k: v for k, v in results.items() if "error" not in v}
 
-    results  = st.session_state["cmp_results"]
-    orig_rgb = st.session_state.get("cmp_orig_rgb")
+    # ── Input ─────────────────────────────────────────────────────────────────
+    sec("Input Image")
+    ci, *_ = st.columns([1] + [1] * len(ok_res), gap="small")
+    with ci: st.image(orig, use_container_width=True); img_cap("Input")
 
-    # ── Input image ───────────────────────────────────────────────────────────
-    section("Input Image")
-    col_img, _ = st.columns([1, 3])
-    with col_img:
-        st.image(orig_rgb, use_container_width=True)
-        img_label("Input")
-
-    # ── Predicted masks ───────────────────────────────────────────────────────
-    section("Predicted Masks")
-    cols = st.columns(len(results), gap="medium")
-    for col, (name, res) in zip(cols, results.items()):
+    # ── Masks ─────────────────────────────────────────────────────────────────
+    sec("Predicted Masks")
+    cols = st.columns(len(ok_res), gap="small")
+    for col, (name, res) in zip(cols, ok_res.items()):
         with col:
-            if "error" in res:
-                st.error(f"{name}: {res['error']}")
-            else:
-                st.image(binary_to_pil(res["binary"]), use_container_width=True)
-                img_label(name)
-                pct = 100.0 * res["binary"].sum() / res["binary"].size
-                st.caption(f"Lesion: {pct:.1f}%  |  {res['elapsed']*1000:.0f} ms")
+            pct = 100.0 * res["binary"].sum() / res["binary"].size
+            st.image(mask_pil(res["binary"]), use_container_width=True)
+            img_cap(f"{name}  ·  {pct:.1f}%")
 
     # ── Overlays ──────────────────────────────────────────────────────────────
-    section("Overlay Comparison")
-    cols2 = st.columns(len(results), gap="medium")
-    for col, (name, res) in zip(cols2, results.items()):
+    sec("Overlays")
+    cols2 = st.columns(len(ok_res), gap="small")
+    for col, (name, res) in zip(cols2, ok_res.items()):
         with col:
-            if "error" not in res:
-                st.image(Image.fromarray(res["overlay"]), use_container_width=True)
-                img_label(f"{name} — Overlay")
+            st.image(Image.fromarray(res["ov"]), use_container_width=True)
+            img_cap(name)
 
-    # ── Inference time table ──────────────────────────────────────────────────
-    section("Inference Summary")
+    # ── Summary table ─────────────────────────────────────────────────────────
+    sec("Inference Summary")
     rows = []
     for name, res in results.items():
-        if "error" not in res:
-            pct     = 100.0 * res["binary"].sum() / res["binary"].size
-            rows.append(
-                f"<tr><td>{name}</td>"
-                f"<td>{res['elapsed']*1000:.1f} ms</td>"
-                f"<td>{pct:.1f}%</td>"
-                f"<td>{MODEL_PARAMS.get(name, '—')}</td></tr>"
-            )
-    if rows:
-        st.markdown(
-            '<table class="info-table">'
-            "<tr><td><b>Model</b></td><td><b>Inference time</b></td>"
-            "<td><b>Lesion area</b></td><td><b>Parameters</b></td></tr>"
-            + "".join(rows)
-            + "</table>",
-            unsafe_allow_html=True,
-        )
+        b = BENCHMARK.get(name, {})
+        if "error" in res:
+            rows.append({"Model": name, "Status": f"Error: {res['error']}",
+                         "Time (ms)": "—", "Lesion %": "—", "Params": "—",
+                         "Test Dice (ref)": "—", "Test IoU (ref)": "—"})
+        else:
+            pct = 100.0 * res["binary"].sum() / res["binary"].size
+            rows.append({"Model": name, "Status": "OK",
+                         "Time (ms)":       f"{res['elapsed']*1000:.0f}",
+                         "Lesion %":        f"{pct:.1f}",
+                         "Params":          b.get("Params", "—"),
+                         "Test Dice (ref)": f"{b.get('Dice', 0):.4f}",
+                         "Test IoU (ref)":  f"{b.get('IoU', 0):.4f}"})
+    st.dataframe(pd.DataFrame(rows).set_index("Model"), use_container_width=True)
 
-    display_footer()
+    footer()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Page: Metrics
+# Page — Metrics
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_metrics():
     st.title("Evaluation Metrics")
-    st.markdown(
-        "Quantitative evaluation results, training diagnostics, and segmentation "
-        "quality visualizations generated during model training and testing."
-    )
+    st.markdown("Pre-computed results on the 390-image held-out test set.")
     st.divider()
 
-    # ── Test metrics ──────────────────────────────────────────────────────────
-    section("Test Set Results")
+    dark = st.get_option("theme.base") == "dark"
 
-    if os.path.isfile(METRICS_FILE):
-        with open(METRICS_FILE) as f:
-            metrics = json.load(f)
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Overview", "Training Curves", "Visualizations", "Definitions"])
 
-        def _fmt(v):
-            try:
-                return f"{float(v):.4f}"
-            except (TypeError, ValueError):
-                return str(v)
+    # ── Tab 1 : Overview ──────────────────────────────────────────────────────
+    with tab1:
+        best = {k: max(BENCHMARK[m][k] for m in BENCHMARK)
+                for k in ("Dice","IoU","Precision","Recall")}
 
-        # Display each model's metrics
-        if isinstance(metrics, dict):
-            first_val = next(iter(metrics.values()), None)
+        # Metric cards per model
+        sec("Per-model results")
+        cols = st.columns(3, gap="medium")
+        for col, (name, b) in zip(cols, BENCHMARK.items()):
+            with col:
+                st.markdown(f"**{name}**")
+                for key in ("Dice","IoU","Precision","Recall"):
+                    is_best = abs(b[key]-best[key]) < 1e-4
+                    col.markdown(stat_card(f"{b[key]:.4f}", key, best=is_best),
+                                 unsafe_allow_html=True)
+                    st.markdown("<div style='margin-top:5px'></div>",
+                                unsafe_allow_html=True)
 
-            if isinstance(first_val, dict):
-                # Format: {"U-Net": {"dice": 0.87, "iou": 0.79}, ...}
-                model_names = list(metrics.keys())
-                cols = st.columns(len(model_names), gap="medium")
-                for col, mname in zip(cols, model_names):
-                    with col:
-                        st.markdown(f"**{mname}**")
-                        m = metrics[mname]
-                        dice_val = m.get("dice", m.get("Dice", m.get("dice_score", "—")))
-                        iou_val  = m.get("iou",  m.get("IoU",  m.get("iou_score",  "—")))
-                        st.markdown(metric_card(_fmt(dice_val), "Dice"), unsafe_allow_html=True)
-                        st.markdown("<div style='margin-top:0.5rem'></div>", unsafe_allow_html=True)
-                        st.markdown(metric_card(_fmt(iou_val),  "IoU"),  unsafe_allow_html=True)
-            else:
-                # Format: {"dice": 0.87, "iou": 0.79, ...} — single model
-                dice_val = metrics.get("dice", metrics.get("Dice", metrics.get("dice_score", "—")))
-                iou_val  = metrics.get("iou",  metrics.get("IoU",  metrics.get("iou_score",  "—")))
-                m1, m2, _, _ = st.columns(4, gap="medium")
-                with m1:
-                    st.markdown(metric_card(_fmt(dice_val), "Dice Coefficient"), unsafe_allow_html=True)
-                with m2:
-                    st.markdown(metric_card(_fmt(iou_val), "IoU Score"), unsafe_allow_html=True)
-
-                with st.expander("Full metrics JSON"):
-                    st.json(metrics)
-    else:
-        st.info(
-            f"No test metrics file found at `{os.path.relpath(METRICS_FILE, BASE_DIR)}`."
-            " Run the evaluation script to generate it."
+        # Full comparison dataframe
+        sec("Full comparison table")
+        df = pd.DataFrame(BENCHMARK).T
+        num_cols = ["Dice","IoU","Precision","Recall"]
+        st.dataframe(
+            df.style.format({c: "{:.4f}" for c in num_cols})
+                    .highlight_max(subset=num_cols, color="#bbf7d0"),
+            use_container_width=True,
         )
+        st.caption("Green = best value in each metric column.")
 
-    # ── Training curves ───────────────────────────────────────────────────────
-    section("Training Curves")
+    # ── Tab 2 : Training curves ───────────────────────────────────────────────
+    with tab2:
+        histories = {n: h for n in ("SegNet","DeepLabV3")
+                     if (h := load_history(n))}
+        if histories:
+            fig = build_curve_fig(histories, dark=dark)
+            buf = BytesIO()
+            fig.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                        facecolor=fig.get_facecolor())
+            plt.close(fig); buf.seek(0)
+            st.image(buf, use_container_width=True)
+            st.caption("Solid = validation · Dashed = training · "
+                       "U-Net history not saved in epoch-by-epoch format.")
+        else:
+            # Fall back to static PNG files
+            statics = [
+                ("U-Net",     os.path.join(BASE_DIR,"outputs","training_curves.png")),
+                ("SegNet",    os.path.join(BASE_DIR,"outputs","segnet","training_curves_segnet.png")),
+                ("DeepLabV3", os.path.join(BASE_DIR,"outputs","deeplabv3","training_curves.png")),
+            ]
+            for name, path in statics:
+                if os.path.isfile(path):
+                    st.markdown(f"**{name}**")
+                    st.image(path, use_container_width=True)
 
-    if os.path.isfile(CURVES_FILE):
-        st.image(CURVES_FILE, use_container_width=True)
-        st.caption(f"Source: `{os.path.relpath(CURVES_FILE, BASE_DIR)}`")
-    else:
-        st.info(
-            f"No training curves image found at `{os.path.relpath(CURVES_FILE, BASE_DIR)}`."
-        )
+    # ── Tab 3 : Visualizations ────────────────────────────────────────────────
+    with tab3:
+        imgs = []
+        pred_png = os.path.join(BASE_DIR,"outputs","predictions","test_predictions.png")
+        if os.path.isfile(pred_png): imgs.append(("Test Predictions", pred_png))
+        if os.path.isdir(CONFUSION_DIR):
+            for f in sorted(os.listdir(CONFUSION_DIR)):
+                if f.lower().endswith((".png",".jpg",".jpeg")):
+                    label = os.path.splitext(f)[0].replace("_"," ").title()
+                    imgs.append((label, os.path.join(CONFUSION_DIR, f)))
 
-    # ── Confusion / segmentation visualizations ───────────────────────────────
-    section("Segmentation Visualizations")
+        if not imgs:
+            st.info("No visualizations found in `outputs/` directory.")
+        else:
+            for i, (label, path) in enumerate(imgs):
+                with st.expander(label, expanded=(i==0)):
+                    st.image(path, use_container_width=True)
+                    st.caption(f"`{os.path.relpath(path, BASE_DIR)}`")
 
-    conf_images = []
-    if os.path.isdir(CONFUSION_DIR):
-        for fname in sorted(os.listdir(CONFUSION_DIR)):
-            if fname.lower().endswith((".png", ".jpg", ".jpeg")):
-                conf_images.append(os.path.join(CONFUSION_DIR, fname))
+    # ── Tab 4 : Definitions ───────────────────────────────────────────────────
+    with tab4:
+        st.markdown("### Metric Definitions")
+        defs = [
+            ("Dice (F1 Score)",
+             "2|A∩B| / (|A|+|B|)",
+             "Harmonic mean of precision and recall. Standard metric for medical "
+             "segmentation. Range [0, 1] — higher is better."),
+            ("IoU (Jaccard Index)",
+             "|A∩B| / |A∪B|",
+             "Ratio of intersection to union. More stringent than Dice — penalises "
+             "false positives harder. Range [0, 1] — higher is better."),
+            ("Precision",
+             "TP / (TP + FP)",
+             "Fraction of predicted lesion pixels that are truly lesion. "
+             "High precision = few false positives."),
+            ("Recall (Sensitivity)",
+             "TP / (TP + FN)",
+             "Fraction of true lesion pixels correctly detected. "
+             "High recall = few missed lesion pixels."),
+        ]
+        for name, formula, desc in defs:
+            with st.container(border=True):
+                c1, c2 = st.columns([1, 2], gap="medium")
+                with c1:
+                    st.markdown(f"**{name}**")
+                    st.code(formula, language=None)
+                with c2:
+                    st.markdown(desc)
 
-    pred_img = os.path.join(OUTPUTS_DIR, "predictions", "test_predictions.png")
-    if os.path.isfile(pred_img):
-        conf_images.insert(0, pred_img)
-
-    if conf_images:
-        for img_path in conf_images:
-            rel  = os.path.relpath(img_path, BASE_DIR)
-            name = os.path.splitext(os.path.basename(img_path))[0].replace("_", " ").title()
-            with st.expander(name, expanded=(img_path == conf_images[0])):
-                st.image(img_path, use_container_width=True)
-                st.caption(f"`{rel}`")
-    else:
-        st.info(
-            "No segmentation visualizations found. "
-            "Run a prediction or the evaluation notebook to generate them."
-        )
-
-    # ── Metric definitions ────────────────────────────────────────────────────
-    section("Metric Definitions")
-    st.markdown("""
-<table class="info-table">
-<tr>
-  <td>Dice coefficient</td>
-  <td>
-    Measures overlap between prediction and ground truth.
-    <i>Dice = 2|A ∩ B| / (|A| + |B|)</i>.
-    Range [0, 1], higher is better. Equivalent to F1 score.
-  </td>
-</tr>
-<tr>
-  <td>IoU (Jaccard Index)</td>
-  <td>
-    Ratio of intersection to union of predicted and true masks.
-    <i>IoU = |A ∩ B| / |A ∪ B|</i>.
-    Range [0, 1], higher is better. More stringent than Dice.
-  </td>
-</tr>
-</table>
-    """, unsafe_allow_html=True)
-
-    display_footer()
+    footer()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Sidebar Navigation
-# ═════════════════════════════════════════════════════════════════════════════
-
-def sidebar_nav():
-    with st.sidebar:
-        st.markdown("## ISIC Segmentation")
-        st.markdown(
-            "<small style='color:#6b7280'>ISIC 2018 · Task 1 · Deep Learning</small>",
-            unsafe_allow_html=True,
-        )
-        st.divider()
-
-        page = st.radio(
-            "Navigation",
-            ["Home", "Prediction", "Comparison", "Metrics"],
-            label_visibility="collapsed",
-        )
-
-        st.divider()
-        device_label = "GPU" if torch.cuda.is_available() else "CPU"
-        st.markdown(
-            f"<small style='color:#9ca3af'>Device: {device_label} &nbsp;|&nbsp; "
-            f"PyTorch {torch.__version__}</small>",
-            unsafe_allow_html=True,
-        )
-
-    return page
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Entry Point
+# Entry point
 # ═════════════════════════════════════════════════════════════════════════════
 
 def main():
-    page = sidebar_nav()
-
-    if page == "Home":
-        page_home()
-    elif page == "Prediction":
-        page_prediction()
-    elif page == "Comparison":
-        page_comparison()
-    elif page == "Metrics":
-        page_metrics()
+    page = sidebar()
+    {
+        "Home":       page_home,
+        "Prediction": page_prediction,
+        "Comparison": page_comparison,
+        "Metrics":    page_metrics,
+    }[page]()
 
 
 if __name__ == "__main__":

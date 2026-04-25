@@ -1,0 +1,22 @@
+{
+  "model": "SegNet",
+  "results": {
+    "accuracy": 0.9453563690185547,
+    "dice": 0.857452218629876,
+    "iou": 0.776171262166938,
+    "precision": 0.8815367817878723,
+    "recall": 0.8832126989656565
+  },
+  "dataset": {
+    "total": 2594,
+    "train": 1815,
+    "val": 389,
+    "test": 390
+  },
+  "config": {
+    "epochs": 30,
+    "batch_size": 8,
+    "img_size": 256,
+    "threshold": 0.5
+  }
+}

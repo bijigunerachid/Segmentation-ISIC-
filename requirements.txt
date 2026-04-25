@@ -5,8 +5,11 @@ opencv-python
 numpy
 matplotlib
 scikit-learn
+scipy
+pandas
 tqdm
 Pillow
 jupyter
 ipykernel
 streamlit
+huggingface_hub

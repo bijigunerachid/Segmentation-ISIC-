@@ -153,7 +153,7 @@ class DeepLabV3Wrapper(nn.Module):
     def __init__(self, out_channels=1, pretrained=True):
         super().__init__()
         weights = seg_models.DeepLabV3_ResNet50_Weights.DEFAULT if pretrained else None
-        self.model = seg_models.deeplabv3_resnet50(weights=weights, aux_loss=False)
+        self.model = seg_models.deeplabv3_resnet50(weights=weights, aux_loss=True)
         self.model.classifier[4] = nn.Conv2d(256, out_channels, kernel_size=1)
     def forward(self, x):
         out = self.model(x)['out']

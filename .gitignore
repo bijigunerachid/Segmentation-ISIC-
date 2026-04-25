@@ -1,4 +1,4 @@
-# Environnement Python
+# Python
 venv/
 __pycache__/
 *.pyc
@@ -9,43 +9,38 @@ __pycache__/
 dist/
 build/
 
-# Dataset (trop lourd pour GitHub)
+# Dataset (too large for GitHub)
 data/images/
 data/masques/
 data/ISIC2018_Task1_Validation_GroundTruth/
 data/ISIC2018_Task1-2_Validation_Input/
 
+# Model checkpoints (too large — hosted on Hugging Face Hub)
+*.pth
+*.pt
 
-# Modèles entraînés
-outputs/checkpoints/*.pth
-outputs/checkpoints/*.pt
-
-# Prédictions générées
+# Generated predictions (runtime output)
 outputs/predictions/
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# VS Code
+# IDE
 .vscode/
 *.code-workspace
-
-# Rapport
-rapport/
+.idea/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs & runs
 *.log
 runs/
 
-# Modèles lourds et checkpoints
-models/*.pth
-models/checkpoints/*.pth
+# Rapport
+rapport/
 
-# Sorties générées
-outputs/
-
+# Claude Code internal
+.claude/
